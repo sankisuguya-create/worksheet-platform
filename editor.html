@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top"><meta charset="utf-8">
+<?!= include('css') ?>
+<script>window.APP_URL='<?!= appUrl ?>'; window.PARAMS=<?!= paramsJson ?>;</script>
+<?!= include('genko') ?>
+<?!= include('registry') ?>
+<?!= include('layout') ?>
+<?!= include('render') ?>
+<style>
+  main{flex-direction:row;}
+  .tools{width:150px; flex:none; background:#fff; border-right:1px solid var(--ui-line);
+         padding:10px; overflow:auto;}
+  .tools h3{font-size:12px; color:#6b675e; margin:12px 0 6px; letter-spacing:.05em;}
+  .tools button{width:100%; margin-bottom:6px; text-align:left; padding:8px 10px; min-height:38px;}
+  .tools button.armed{background:var(--accent); border-color:var(--accent); color:#fff;}
+  .tools details{margin:0 0 10px;}
+  .tools summary{font-size:12px; color:#6b675e; cursor:pointer; padding:4px 0;}
+  .hint{font-size:11.5px; color:#6b675e; line-height:1.6; margin:6px 0 0;}
+  .mid{flex:1; display:flex; flex-direction:column; min-width:0;}
+
+  /* 設定は選ばれているときだけ出す。空のパネルを常設しない。 */
+  .props{width:274px; flex:none; background:#fff; border-left:1px solid var(--ui-line);
+         padding:12px; overflow:auto; display:none;}
+  body.has-sel .props{display:block;}
+  .props h3{font-size:13px; margin:0 0 10px;}
+  .props label{display:block; font-size:12px; color:#6b675e; margin:10px 0 4px;}
+  .props input,.props select,.props textarea{width:100%;}
+  .props .chk{display:flex; align-items:center; gap:8px; font-size:14px; margin-top:12px;}
+  .props .chk input{width:20px; height:20px;}
+  .props .xy{display:flex; gap:6px; margin-top:6px;}
+  .props .cellgrid{display:grid; gap:3px;}
+  .props .cellgrid select{width:100%; min-height:30px; padding:2px; font-size:12px;}
+  .props details{margin-top:14px;}
+  .props summary{font-size:12px; color:#6b675e; cursor:pointer;}
+
+  .stagewrap{position:relative;}
+  .stage .ob{cursor:move;}
+  .stage .ob.sel{outline:3px solid var(--accent); outline-offset:2px;}
+  .hnd{position:absolute; right:-9px; bottom:-9px; width:20px; height:20px;
+       background:var(--accent); border:2px solid #fff; border-radius:5px; cursor:nwse-resize;}
+  .stage .ob .field,.stage .ob input,.stage .ob textarea,
+  .stage .ob select,.stage .ob table{pointer-events:none;}
+  body.arm .stage{cursor:crosshair;}
+
+  #ghost{position:absolute; border:2px dashed var(--accent);
+         background:rgba(47,93,80,.08); pointer-events:none; display:none;}
+  .guide{position:absolute; background:#c1553a; pointer-events:none;}
+  #fab{position:absolute; display:none; gap:4px; background:#fff; padding:4px;
+       border:1px solid var(--ui-line); border-radius:9px;
+       box-shadow:0 2px 8px rgba(0,0,0,.14); z-index:5;}
+  #fab button{min-height:32px; padding:5px 10px; font-size:13px;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ワークシート編集</h1>
+  <span class="sp" id="lname"></span>
+  <button id="undo" title="Ctrl+Z">← もどす</button>
+  <button id="redo" title="Ctrl+Y">やり直す →</button>
+  <button id="try">児童の画面でためす</button>
+  <select id="pub">
+    <option value="">下書き</option>
+    <option value="公開">公開</option>
+    <option value="今日">今日の授業</option>
+  </select>
+  <button id="save" class="primary" title="Ctrl+S">保存</button>
+  <button id="tolist">一覧へ</button>
+  <span class="msg" id="msg"></span>
+</header>
+
+<main>
+  <nav class="tools">
+    <h3>おく（教師のみ）</h3><div id="tplace"></div>
+    <details id="dplace"><summary>そのほか</summary><div id="tplace2"></div></details>
+    <h3>書かせる（児童）</h3><div id="tfield"></div>
+    <details id="dfield"><summary>そのほか</summary><div id="tfield2"></div></details>
+    <p class="hint">ボタンを押してから、置きたいところを<b>ドラッグ</b>。<br>Escで取り消し。</p>
+  </nav>
+
+  <div class="mid">
+    <div class="tabs" id="tabs"></div>
+    <div class="stagewrap" id="wrap">
+      <div class="stage" id="stage"></div>
+      <div id="ghost"></div>
+      <div id="fab"></div>
+    </div>
+  </div>
+
+  <aside class="props" id="props"></aside>
+</main>
+
+<script>
+var UID = param('u'), LNAME = param('l');
+var TPL = {v:1, pages:[{objects:[]}]}, PG = 0, SEL = null, SCALE = 1, META = null;
+var UNDO = [], REDO = [], DIRTY = false, TOOL = null, seq = 0, autoT = null;
+
+function page(){ return TPL.pages[PG]; }
+function uid(){ return 'o' + Date.now().toString(36) + (seq++).toString(36); }
+function find(id){
+  var o = page().objects;
+  for (var i = 0; i < o.length; i++) if (o[i].id === id) return o[i];
+  return null;
+}
+
+/* ================= もどす・やり直す ================= */
+function snap(){
+  UNDO.push(JSON.stringify(TPL));
+  if (UNDO.length > 60) UNDO.shift();
+  REDO.length = 0;
+  setDirty(true);
+}
+function restore_(from, to){
+  if (!from.length) return;
+  to.push(JSON.stringify(TPL));
+  TPL = JSON.parse(from.pop());
+  PG = Math.min(PG, TPL.pages.length - 1);
+  SEL = null; setDirty(true); draw();
+}
+function undo(){ restore_(UNDO, REDO); }
+function redo(){ restore_(REDO, UNDO); }
+
+function setDirty(v){
+  DIRTY = v;
+  $('save').textContent = v ? '保存（未保存）' : '保存';
+  $('undo').disabled = !UNDO.length;
+  $('redo').disabled = !REDO.length;
+  clearTimeout(autoT);
+  // 下書きのあいだは自動で保存する。
+  // 公開中は児童の画面が授業中に変わってしまうので、教師が押したときだけ保存する。
+  if (v && !$('pub').value) autoT = setTimeout(function(){ doSave(true); }, 5000);
+}
+
+/* ================= 道具（よく使う／そのほか） ================= */
+function buildTools(){
+  function btns(group, tier){
+    return kindsOf(group, tier).map(function(k){
+      return '<button data-k="' + k + '">' + esc(kindLabel(k)) + '</button>';
+    }).join('');
+  }
+  $('tplace').innerHTML  = btns('place', 'common');
+  $('tplace2').innerHTML = btns('place', 'rest');
+  $('tfield').innerHTML  = btns('field', 'common');
+  $('tfield2').innerHTML = btns('field', 'rest');
+  document.querySelectorAll('.tools button[data-k]').forEach(function(b){
+    b.addEventListener('click', function(){ arm(this.getAttribute('data-k')); });
+  });
+}
+function arm(kind){
+  TOOL = (TOOL === kind) ? null : kind;
+  document.querySelectorAll('.tools button[data-k]').forEach(function(b){
+    b.classList.toggle('armed', b.getAttribute('data-k') === TOOL);
+  });
+  document.body.classList.toggle('arm', !!TOOL);
+}
+function createAt(kind, x, y, w, h){
+  var o = makeObject(kind, uid());
+  if (w > 24 && h > 20){ o.w = Math.round(w / 4) * 4; o.h = Math.round(h / 4) * 4; }
+  o.x = Math.max(0, Math.min(PAGE_W - o.w, Math.round(x / 4) * 4));
+  o.y = Math.max(0, Math.min(PAGE_H - o.h, Math.round(y / 4) * 4));
+  snap();
+  page().objects.push(o);
+  SEL = o.id;
+  arm(null);
+  draw();
+}
+
+/* ================= 描画 ================= */
+function draw(){
+  $('stage').innerHTML = pageHtml(page(), 'edit', null);
+  SCALE = fitStage($('stage'), $('wrap'));
+  document.body.classList.toggle('has-sel', !!SEL);
+  var sel = SEL && $('stage').querySelector('.ob[data-id="' + SEL + '"]');
+  if (sel){
+    sel.classList.add('sel');
+    var h = document.createElement('div'); h.className = 'hnd'; sel.appendChild(h);
+  }
+  placeFab();
+  drawTabs();
+  drawProps();
+}
+
+function placeFab(){
+  var f = $('fab'), o = SEL && find(SEL);
+  if (!o){ f.style.display = 'none'; return; }
+  var sr = $('stage').getBoundingClientRect(), wr = $('wrap').getBoundingClientRect();
+  f.innerHTML = '<button data-a="dup">複製</button><button data-a="front">前面へ</button>' +
+                '<button class="danger" data-a="del">削除</button>';
+  f.style.display = 'flex';
+  f.style.left = Math.max(2, sr.left - wr.left + o.x * SCALE) + 'px';
+  f.style.top  = Math.max(2, sr.top  - wr.top  + o.y * SCALE - 44) + 'px';
+  f.querySelectorAll('[data-a]').forEach(function(b){
+    b.addEventListener('click', function(){ fabAct(this.dataset.a); });
+  });
+}
+function fabAct(a){
+  var o = find(SEL);
+  if (!o) return;
+  if (a === 'del'){ snap(); page().objects = page().objects.filter(function(x){ return x.id !== o.id; }); SEL = null; }
+  if (a === 'dup'){
+    snap();
+    var c = JSON.parse(JSON.stringify(o));
+    c.id = uid(); c.x = Math.min(PAGE_W - c.w, c.x + 24); c.y = Math.min(PAGE_H - c.h, c.y + 24);
+    page().objects.push(c); SEL = c.id;
+  }
+  if (a === 'front'){
+    snap();
+    page().objects = page().objects.filter(function(x){ return x.id !== o.id; }).concat([o]);
+  }
+  draw();
+}
+
+function drawTabs(){
+  var h = TPL.pages.map(function(_, i){
+    return '<button class="' + (i === PG ? 'on' : '') + '" data-p="' + i + '">' +
+           (i + 1) + 'ページ</button>';
+  }).join('');
+  h += '<button id="addpg">＋ページ</button>';
+  if (TPL.pages.length > 1) h += '<button id="delpg" class="danger">このページを削除</button>';
+  $('tabs').innerHTML = h;
+  $('tabs').querySelectorAll('[data-p]').forEach(function(b){
+    b.addEventListener('click', function(){ PG = +this.dataset.p; SEL = null; draw(); });
+  });
+  $('addpg').addEventListener('click', function(){
+    snap(); TPL.pages.push({objects: []}); PG = TPL.pages.length - 1; SEL = null; draw();
+  });
+  var d = $('delpg');
+  if (d) d.addEventListener('click', function(){
+    snap(); TPL.pages.splice(PG, 1); PG = Math.max(0, PG - 1); SEL = null; draw();
+  });
+}
+
+/* ================= 設定（スキーマから自動生成） ================= */
+function inputHtml(o, p){
+  var v = o[p.k];
+  switch (p.t){
+    case 'number':   return '<input type="number" data-f="' + p.k + '" value="' + esc(v == null ? '' : v) + '">';
+    case 'textarea': return '<textarea data-f="' + p.k + '" rows="' + (p.rows || 3) + '">' + esc(v) + '</textarea>';
+    case 'lines':    return '<textarea data-f="' + p.k + '" rows="' + (p.rows || 4) + '">' + esc((v || []).join('\n')) + '</textarea>';
+    case 'csv':      return '<input type="text" data-f="' + p.k + '" value="' + esc((v || []).join(',')) + '">';
+    case 'cells':    return cellsHtml(o);
+    case 'select':   return '<select data-f="' + p.k + '">' + (p.opts || []).map(function(op){
+                       return '<option value="' + esc(op[0]) + '"' + (v === op[0] ? ' selected' : '') +
+                              '>' + esc(op[1]) + '</option>'; }).join('') + '</select>';
+    default:         return '<input type="text" data-f="' + p.k + '" value="' + esc(v) + '">';
+  }
+}
+/* 表のセルごとに「見出し／文字／記入欄」を選ばせる小さな盤面。
+   書かれていないセルは既定（0行目=見出し、以降=記入欄）に従うので、
+   行や列を増やしても設定は失われない。 */
+function cellsHtml(o){
+  var h = '<div class="cellgrid" style="grid-template-columns:repeat(' + (o.cols || 1) + ',1fr)">';
+  for (var r = 0; r < (o.rows || 1); r++){
+    for (var c = 0; c < (o.cols || 1); c++){
+      var cl = tableCell(o, r, c);
+      h += '<select data-cell="' + r + ',' + c + '" title="' + (r + 1) + '行' + (c + 1) + '列">' +
+           '<option value="head"'  + (cl.t === 'head'  ? ' selected' : '') + '>見出</option>' +
+           '<option value="text"'  + (cl.t === 'text'  ? ' selected' : '') + '>文字</option>' +
+           '<option value="input"' + (cl.t === 'input' ? ' selected' : '') + '>記入</option>' +
+           '</select>';
+    }
+  }
+  h += '</div><p class="note" style="margin:6px 0 0">「文字」にしたセルの中身は、' +
+       '下の欄に「行,列=文字」の形で書きます。</p>' +
+       '<textarea data-celltext rows="3" placeholder="1,0=まとめ"></textarea>';
+  return h;
+}
+
+function bindCells(o){
+  $('props').querySelectorAll('[data-cell]').forEach(function(s){
+    s.addEventListener('change', function(){
+      var key = this.getAttribute('data-cell');
+      snap();
+      o.cells = o.cells || {};
+      o.cells[key] = o.cells[key] || {};
+      o.cells[key].t = this.value;
+      draw();
+    });
+  });
+  var ta = $('props').querySelector('[data-celltext]');
+  if (!ta) return;
+  var lines = [];
+  for (var k in (o.cells || {}))
+    if (o.cells[k].text) lines.push(k + '=' + o.cells[k].text);
+  ta.value = lines.join('\n');
+  ta.addEventListener('change', function(){
+    snap();
+    o.cells = o.cells || {};
+    for (var k2 in o.cells) delete o.cells[k2].text;
+    this.value.split('\n').forEach(function(ln){
+      var i = ln.indexOf('=');
+      if (i < 1) return;
+      var key = ln.slice(0, i).trim();
+      o.cells[key] = o.cells[key] || {t: 'text'};
+      o.cells[key].text = ln.slice(i + 1);
+    });
+    draw();
+  });
+}
+
+function drawProps(){
+  var o = SEL && find(SEL);
+  if (!o){ $('props').innerHTML = ''; return; }
+  var props = propsOf(o.kind), h = '<h3>' + esc(kindLabel(o.kind)) + '</h3>';
+  props.forEach(function(p){
+    h += (p.t === 'bool')
+      ? '<div class="chk"><input type="checkbox" data-f="' + p.k + '"' +
+        (o[p.k] ? ' checked' : '') + '>' + esc(p.l) + '</div>'
+      : '<label>' + esc(p.l) + '</label>' + inputHtml(o, p);
+  });
+  h += '<details><summary>位置とおおきさ</summary><div class="xy">' +
+       '<input type="number" data-f="x" value="' + Math.round(o.x) + '">' +
+       '<input type="number" data-f="y" value="' + Math.round(o.y) + '"></div><div class="xy">' +
+       '<input type="number" data-f="w" value="' + Math.round(o.w) + '">' +
+       '<input type="number" data-f="h" value="' + Math.round(o.h) + '"></div></details>';
+  $('props').innerHTML = h;
+
+  var schema = {};
+  props.forEach(function(p){ schema[p.k] = p; });
+  $('props').querySelectorAll('[data-f]').forEach(function(el){
+    el.addEventListener('change', function(){
+      var k = this.getAttribute('data-f'), p = schema[k], val;
+      if (this.type === 'checkbox') val = this.checked;
+      else if (this.type === 'number') val = +this.value;
+      else if (p && p.t === 'lines'){
+        val = this.value.split('\n').map(function(s){ return s.trim(); })
+                        .filter(function(s){ return s; });
+        // 複数選択はシート上でカンマ区切りに保存されるため、選択肢のカンマは復元できない。
+        // 教師に規則を覚えさせず、ここで取り除いて知らせる。
+        if (KIND[o.kind] && KIND[o.kind].multi){
+          var fixed = false;
+          val = val.map(function(s){
+            var t2 = s.replace(/[,、]/g, '');
+            if (t2 !== s) fixed = true;
+            return t2;
+          });
+          if (fixed) flash('選択肢からカンマを取り除きました（保存の形式に使うため）');
+        }
+      }
+      else if (p && p.t === 'csv') val = this.value.split(',');
+      else val = this.value;
+      snap(); o[k] = val; draw();
+    });
+  });
+}
+
+/* ================= 整列ガイド ================= */
+function clearGuides(){ $('stage').querySelectorAll('.guide').forEach(function(g){ g.remove(); }); }
+function guide(vertical, pos){
+  var g = document.createElement('div');
+  g.className = 'guide';
+  if (vertical){ g.style.left = pos + 'px'; g.style.top = '0'; g.style.width = '1px'; g.style.height = PAGE_H + 'px'; }
+  else { g.style.top = pos + 'px'; g.style.left = '0'; g.style.height = '1px'; g.style.width = PAGE_W + 'px'; }
+  $('stage').appendChild(g);
+}
+function snapAlign(o){
+  clearGuides();
+  var TOL = 8, xs = [], ys = [];
+  page().objects.forEach(function(t){
+    if (t.id === o.id) return;
+    xs.push(t.x, t.x + t.w / 2, t.x + t.w);
+    ys.push(t.y, t.y + t.h / 2, t.y + t.h);
+  });
+  xs.push(LAY.margin, PAGE_W / 2, PAGE_W - LAY.margin);
+  ys.push(LAY.margin, PAGE_H / 2, PAGE_H - LAY.margin);
+
+  var mx = [[o.x, 0], [o.x + o.w / 2, o.w / 2], [o.x + o.w, o.w]];
+  for (var i = 0; i < mx.length; i++){
+    for (var j = 0; j < xs.length; j++)
+      if (Math.abs(mx[i][0] - xs[j]) <= TOL){ o.x = xs[j] - mx[i][1]; guide(true, xs[j]); i = mx.length; break; }
+  }
+  var my = [[o.y, 0], [o.y + o.h / 2, o.h / 2], [o.y + o.h, o.h]];
+  for (var a = 0; a < my.length; a++){
+    for (var b = 0; b < ys.length; b++)
+      if (Math.abs(my[a][0] - ys[b]) <= TOL){ o.y = ys[b] - my[a][1]; guide(false, ys[b]); a = my.length; break; }
+  }
+}
+
+/* ================= 直接配置・移動・リサイズ ================= */
+var drag = null, ghost = null;
+function stagePoint(e){
+  var r = $('stage').getBoundingClientRect();
+  return {x: (e.clientX - r.left) / SCALE, y: (e.clientY - r.top) / SCALE};
+}
+$('stage').addEventListener('pointerdown', function(e){
+  var p = stagePoint(e);
+  if (TOOL){
+    ghost = {kind: TOOL, x: p.x, y: p.y};
+    $('ghost').style.display = 'block';
+    e.preventDefault();
+    return;
+  }
+  var isHandle = e.target.classList && e.target.classList.contains('hnd');
+  var ob = e.target.closest ? e.target.closest('.ob') : null;
+  if (!ob && !isHandle){ SEL = null; draw(); return; }
+  var o = find(isHandle ? SEL : ob.getAttribute('data-id'));
+  if (!o) return;
+  if (!isHandle && SEL !== o.id){ SEL = o.id; draw(); }
+  snap();
+  drag = {o: o, mode: isHandle ? 'size' : 'move', sx: e.clientX, sy: e.clientY,
+          x: o.x, y: o.y, w: o.w, h: o.h};
+  $('fab').style.display = 'none';
+  e.preventDefault();
+});
+window.addEventListener('pointermove', function(e){
+  if (ghost){
+    var p = stagePoint(e), sr = $('stage').getBoundingClientRect(), wr = $('wrap').getBoundingClientRect();
+    var x0 = Math.min(ghost.x, p.x), y0 = Math.min(ghost.y, p.y), g = $('ghost');
+    g.style.left   = (sr.left - wr.left + x0 * SCALE) + 'px';
+    g.style.top    = (sr.top  - wr.top  + y0 * SCALE) + 'px';
+    g.style.width  = (Math.abs(p.x - ghost.x) * SCALE) + 'px';
+    g.style.height = (Math.abs(p.y - ghost.y) * SCALE) + 'px';
+    ghost.x2 = p.x; ghost.y2 = p.y;
+    return;
+  }
+  if (!drag) return;
+  var dx = (e.clientX - drag.sx) / SCALE, dy = (e.clientY - drag.sy) / SCALE, o = drag.o;
+  if (drag.mode === 'move'){
+    o.x = Math.max(0, Math.min(PAGE_W - o.w, Math.round((drag.x + dx) / 4) * 4));
+    o.y = Math.max(0, Math.min(PAGE_H - o.h, Math.round((drag.y + dy) / 4) * 4));
+    snapAlign(o);
+  } else {
+    o.w = Math.max(40, Math.round((drag.w + dx) / 4) * 4);
+    o.h = Math.max(24, Math.round((drag.h + dy) / 4) * 4);
+  }
+  var el = $('stage').querySelector('.ob[data-id="' + o.id + '"]');
+  if (el){
+    el.style.left = o.x + 'px'; el.style.top = o.y + 'px';
+    el.style.width = o.w + 'px'; el.style.height = o.h + 'px';
+  }
+});
+window.addEventListener('pointerup', function(){
+  if (ghost){
+    var g = ghost; ghost = null;
+    $('ghost').style.display = 'none';
+    var x = Math.min(g.x, g.x2 == null ? g.x : g.x2), y = Math.min(g.y, g.y2 == null ? g.y : g.y2);
+    createAt(g.kind, x, y, Math.abs((g.x2 || g.x) - g.x), Math.abs((g.y2 || g.y) - g.y));
+    return;
+  }
+  if (drag){ drag = null; clearGuides(); draw(); }
+});
+window.addEventListener('resize', function(){ SCALE = fitStage($('stage'), $('wrap')); placeFab(); });
+
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape'){ arm(null); return; }
+  var meta = e.ctrlKey || e.metaKey;
+  if (!meta){
+    if ((e.key === 'Delete' || e.key === 'Backspace') && SEL &&
+        ['INPUT','TEXTAREA','SELECT'].indexOf(e.target.tagName) < 0){
+      e.preventDefault(); fabAct('del');
+    }
+    return;
+  }
+  if (e.key === 'z'){ e.preventDefault(); undo(); }
+  if (e.key === 'y' || (e.key === 'Z' && e.shiftKey)){ e.preventDefault(); redo(); }
+  if (e.key === 's'){ e.preventDefault(); doSave(); }
+});
+
+/* ================= 保存・公開・プレビュー ================= */
+/* 集約対象なのにラベルが空だと、列名が「問1」になって後から誰にも読めない。
+   保存時に種類名で埋め、何を埋めたかを知らせる。教師が規則を覚える必要をなくす。 */
+function fillLabels(){
+  var filled = [];
+  (TPL.pages || []).forEach(function(p, pi){
+    (p.objects || []).forEach(function(o){
+      var d = KIND[o.kind];
+      if (!d) return;
+      var isField = (d.group === 'field');
+      if (!isField && !(o.kind === 'table' && o.collect)) return;
+      if (isField && !o.collect) return;
+      if (isField && !String(o.label || '').trim()){
+        o.label = d.label;
+        filled.push((pi + 1) + 'ページの' + d.label);
+      }
+      if (o.kind === 'table'){
+        var heads = o.heads || [];
+        for (var c = 0; c < (o.cols || 0); c++){
+          if (!String(heads[c] || '').trim()){
+            heads[c] = '列' + (c + 1);
+            filled.push((pi + 1) + 'ページの表の' + (c + 1) + '列目');
+          }
+        }
+        o.heads = heads;
+      }
+    });
+  });
+  return filled;
+}
+
+function doSave(quiet){
+  clearTimeout(autoT);
+  var filled = fillLabels();
+  var b = $('save'); b.disabled = true;
+  if (filled.length) flash('ラベルが空だったので入れました：' + filled.join('、'), true);
+  else if (!quiet) flash('保存中…');
+  google.script.run.withSuccessHandler(function(r){
+    b.disabled = false; setDirty(false);
+    if (filled.length) draw();
+    else flash(r.warn ? '保存しました（容量が上限に近づいています。ページを分けてください）'
+                      : '保存しました', !!r.warn);
+  }).withFailureHandler(function(e){ b.disabled = false; flash(e.message, true); })
+    .saveTemplate(UID, LNAME, TPL);
+}
+$('save').addEventListener('click', function(){ doSave(); });
+$('undo').addEventListener('click', undo);
+$('redo').addEventListener('click', redo);
+/* 見た目だけの再現ではなく、児童が使うものと同じ画面をそのまま開く。
+   書いたものは記録されない。 */
+$('try').addEventListener('click', function(){
+  function go(){
+    navTo('?u=' + encodeURIComponent(UID) + '&l=' + encodeURIComponent(LNAME) + '&try=1');
+  }
+  if (!DIRTY) return go();
+  flash('保存してから開きます…');
+  clearTimeout(autoT);
+  google.script.run.withSuccessHandler(function(){ setDirty(false); go(); })
+    .withFailureHandler(function(err){ flash(err.message, true); })
+    .saveTemplate(UID, LNAME, TPL);
+});
+$('pub').addEventListener('change', function(){
+  var v = this.value;
+  google.script.run.withSuccessHandler(function(){
+    flash(v ? '公開しました（公開中は自動保存しません）' : '下書きにしました');
+  }).withFailureHandler(function(e){ flash(e.message, true); })
+    .setPublish(UID, LNAME, v);
+});
+$('tolist').addEventListener('click', function(){
+  if (DIRTY && !confirm('保存していない変更があります。一覧へ移動しますか。')) return;
+  navTo('?view=teacher');
+});
+window.addEventListener('beforeunload', function(e){
+  if (!DIRTY) return;
+  e.preventDefault(); e.returnValue = '';
+});
+
+/* ================= 起動 ================= */
+buildTools();
+if (!UID || !LNAME){
+  document.body.innerHTML = '<p style="padding:40px">授業が指定されていません。一覧から選んでください。</p>';
+} else {
+  google.script.run.withSuccessHandler(function(d){
+    META = d.meta;
+    TPL = (d.template && d.template.pages) ? d.template : {v:1, pages:[{objects:[]}]};
+    $('lname').textContent = META.grade + ' ' + META.subject + '／' + META.unit + '／' + META.name;
+    $('pub').value = META.pub || '';
+    setDirty(false); draw();
+  }).withFailureHandler(function(e){
+    document.body.innerHTML = '<p style="padding:40px;color:#a8322a">' + esc(e.message) + '</p>';
+  }).openLesson(UID, LNAME);
+}
+</script>
+</body>
+</html>

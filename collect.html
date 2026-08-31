@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top"><meta charset="utf-8">
+<?!= include('css') ?>
+<script>window.APP_URL='<?!= appUrl ?>'; window.PARAMS=<?!= paramsJson ?>;</script>
+<?!= include('render') ?>
+<style>
+  main{display:block; overflow:auto; padding:0;}
+  .bar{display:flex; gap:10px; flex-wrap:wrap; align-items:center;
+       padding:10px 16px; background:#fff; border-bottom:1px solid var(--ui-line);}
+  .bar label{font-size:12px; color:#6b675e; display:flex; flex-direction:column; gap:3px;}
+  .seg{display:flex; gap:0;}
+  .seg button{border-radius:0; margin:0; border-right:none;}
+  .seg button:first-child{border-radius:8px 0 0 8px;}
+  .seg button:last-child{border-radius:0 8px 8px 0; border-right:1px solid var(--ui-line);}
+  .seg button.on{border-color:var(--accent);}
+
+  .sheetwrap{padding:18px; display:flex; justify-content:center;}
+  .sheet{background:#fff; width:100%; max-width:1120px; padding:22px;
+         box-shadow:0 1px 6px rgba(0,0,0,.14); border-radius:6px;}
+  .sheet h2{font-size:18px; margin:0 0 4px;}
+  .sheet .qh{font-size:14px; color:var(--accent); font-weight:700; margin:0 0 14px;}
+
+  .grid{display:grid; gap:12px;}
+  .grid.c1{grid-template-columns:1fr;}
+  .grid.c2{grid-template-columns:1fr 1fr;}
+  .grid.c3{grid-template-columns:1fr 1fr 1fr;}
+  .item{border:1px solid var(--ui-line); border-radius:8px; padding:10px 12px; break-inside:avoid;}
+  .item .who{font-size:12px; color:#6b675e; font-weight:700; margin-bottom:4px;}
+  .item .txt{font-size:16px; line-height:1.7; white-space:pre-wrap; word-break:break-word;}
+  .item .num{display:inline-block; min-width:22px; height:22px; line-height:22px;
+             text-align:center; border-radius:50%; background:var(--accent); color:#fff;
+             font-size:12px; margin-right:6px;}
+
+  /* 短冊：1人1行。比べるときに使う */
+  .strip .item{display:flex; gap:12px; align-items:baseline; border:none;
+               border-bottom:1px solid var(--ui-line); border-radius:0; padding:8px 2px;}
+  .strip .item .who{flex:0 0 110px; margin:0;}
+
+  /* ひとりずつ：電子黒板に出す */
+  .one{padding:36px; text-align:left;}
+  .one .who{font-size:20px; color:var(--accent); font-weight:700; margin-bottom:14px;}
+  .one .txt{font-size:40px; line-height:1.6; white-space:pre-wrap; word-break:break-word;}
+  .one .nav{display:flex; gap:14px; align-items:center; justify-content:center; margin-top:28px;}
+  .one .nav button{min-height:56px; font-size:18px; padding:12px 28px;}
+  body.full .bar{display:none;}
+  body.full .sheetwrap{padding:0;}
+  body.full .sheet{max-width:none; box-shadow:none; border-radius:0; min-height:100vh;}
+  body.full .one .txt{font-size:52px;}
+
+  .empty2{padding:40px; text-align:center; color:#8a857b;}
+
+  @page{size:A4 portrait; margin:14mm;}
+  @media print{
+    header,.bar{display:none !important;}
+    body{background:#fff;}
+    .sheetwrap{padding:0;} .sheet{box-shadow:none; max-width:none; padding:0;}
+    .item{border-color:#999;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>みんなの考えを並べる</h1>
+  <span class="sp crumb" id="crumb"></span>
+  <button id="back">提出にもどる</button>
+  <span class="msg" id="msg"></span>
+</header>
+
+<div class="bar" id="bar"></div>
+<main><div class="sheetwrap"><div class="sheet" id="sheet"></div></div></main>
+
+<script>
+var UID = param('u'), LNAME = param('l');
+var D = null, FIELD = '', WHO = 'all', VIEW = 'c2', ONE = 0;
+
+function rows(){
+  if (!D) return [];
+  var list = D.rows.slice();
+  if (WHO === 'pick') list = list.filter(function(r){ return r.pick > 0; })
+                                 .sort(function(a,b){ return a.pick - b.pick; });
+  else if (WHO === 'done') list = list.filter(function(r){ return (r.vals[FIELD] || '').trim(); });
+  else if (WHO === 'todo') list = list.filter(function(r){ return !(r.vals[FIELD] || '').trim(); });
+  return list;
+}
+
+function drawBar(){
+  var fs = D.fields.map(function(f){
+    return '<option' + (f === FIELD ? ' selected' : '') + '>' + esc(f) + '</option>';
+  }).join('');
+  $('bar').innerHTML =
+    '<label>どの欄<select id="fsel">' + fs + '</select></label>' +
+    '<label>だれの<select id="wsel">' +
+      '<option value="all"' + (WHO === 'all' ? ' selected' : '') + '>ぜんいん</option>' +
+      '<option value="pick"' + (WHO === 'pick' ? ' selected' : '') + '>取り上げた人</option>' +
+      '<option value="done"' + (WHO === 'done' ? ' selected' : '') + '>書いた人だけ</option>' +
+      '<option value="todo"' + (WHO === 'todo' ? ' selected' : '') + '>まだの人</option>' +
+    '</select></label>' +
+    '<label>並べ方<span class="seg">' +
+      '<button data-v="c1" class="' + (VIEW==='c1'?'on':'') + '">1列</button>' +
+      '<button data-v="c2" class="' + (VIEW==='c2'?'on':'') + '">2列</button>' +
+      '<button data-v="c3" class="' + (VIEW==='c3'?'on':'') + '">3列</button>' +
+      '<button data-v="strip" class="' + (VIEW==='strip'?'on':'') + '">短冊</button>' +
+      '<button data-v="one" class="' + (VIEW==='one'?'on':'') + '">ひとりずつ</button>' +
+    '</span></label>' +
+    '<span class="sp"></span>' +
+    '<button id="clr">取り上げを消す</button>' +
+    '<button id="prt">印刷</button>' +
+    '<button class="primary" id="fs">大きく映す</button>';
+
+  $('fsel').addEventListener('change', function(){ FIELD = this.value; ONE = 0; draw(); });
+  $('wsel').addEventListener('change', function(){ WHO = this.value; ONE = 0; draw(); });
+  $('bar').querySelectorAll('[data-v]').forEach(function(b){
+    b.addEventListener('click', function(){ VIEW = this.dataset.v; ONE = 0; draw(); });
+  });
+  $('prt').addEventListener('click', function(){ window.print(); });
+  $('fs').addEventListener('click', toggleFull);
+  $('clr').addEventListener('click', function(){
+    if (!confirm('取り上げの印をすべて消します。よろしいですか。')) return;
+    google.script.run.withSuccessHandler(function(){
+      D.rows.forEach(function(r){ r.pick = 0; });
+      flash('消しました'); draw();
+    }).withFailureHandler(function(e){ flash(e.message, true); })
+      .clearPicks(UID, LNAME);
+  });
+}
+
+function toggleFull(){
+  document.body.classList.toggle('full');
+  if (document.body.classList.contains('full')){
+    if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+  } else if (document.exitFullscreen && document.fullscreenElement) {
+    document.exitFullscreen();
+  }
+}
+
+function head(){
+  return '<h2>' + esc(D.meta.name) + '</h2>' +
+         '<p class="qh">' + esc(FIELD) + '</p>';
+}
+
+function draw(){
+  drawBar();
+  var list = rows();
+  if (!list.length){
+    $('sheet').innerHTML = head() + '<p class="empty2">出せるものがありません。</p>';
+    return;
+  }
+
+  if (VIEW === 'one'){
+    ONE = Math.max(0, Math.min(list.length - 1, ONE));
+    var r = list[ONE];
+    $('sheet').innerHTML = head() +
+      '<div class="one"><div class="who">' + esc(r.name) + '</div>' +
+      '<div class="txt">' + esc(r.vals[FIELD] || '') + '</div>' +
+      '<div class="nav"><button id="pv">◀ まえ</button>' +
+      '<span>' + (ONE + 1) + ' / ' + list.length + '</span>' +
+      '<button class="primary" id="nx">つぎ ▶</button></div></div>';
+    if ($('pv')) $('pv').addEventListener('click', function(){ ONE--; draw(); });
+    if ($('nx')) $('nx').addEventListener('click', function(){ ONE++; draw(); });
+    return;
+  }
+
+  var cls = (VIEW === 'strip') ? 'grid c1 strip' : 'grid ' + VIEW;
+  var h = head() + '<div class="' + cls + '">';
+  list.forEach(function(r){
+    h += '<div class="item"><div class="who">' +
+         (r.pick ? '<span class="num">' + r.pick + '</span>' : '') +
+         esc(r.name) + '</div>' +
+         '<div class="txt">' + esc(r.vals[FIELD] || '') + '</div></div>';
+  });
+  $('sheet').innerHTML = h + '</div>';
+}
+
+document.addEventListener('keydown', function(e){
+  if (VIEW !== 'one') return;
+  if (e.key === 'ArrowRight' || e.key === ' '){ e.preventDefault(); ONE++; draw(); }
+  if (e.key === 'ArrowLeft'){ e.preventDefault(); ONE--; draw(); }
+  if (e.key === 'Escape' && document.body.classList.contains('full')) toggleFull();
+});
+
+$('back').addEventListener('click', function(){
+  navTo('?view=teacher&u=' + encodeURIComponent(UID) + '&l=' + encodeURIComponent(LNAME));
+});
+
+google.script.run.withSuccessHandler(function(d){
+  D = d;
+  $('crumb').textContent = d.meta.grade + ' ' + d.meta.subject + '／' + d.meta.unit;
+  if (!d.fields.length){
+    $('sheet').innerHTML = '<p class="empty2">集約対象の入力欄がありません。編集画面で「集約対象」を付けてください。</p>';
+    return;
+  }
+  FIELD = d.fields[0];
+  draw();
+}).withFailureHandler(function(e){
+  $('sheet').innerHTML = '<p class="empty2">' + esc(e.message) + '</p>';
+}).loadCollect(UID, LNAME);
+</script>
+</body>
+</html>

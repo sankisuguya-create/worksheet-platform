@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top"><meta charset="utf-8">
+<?!= include('css') ?>
+<script>window.APP_URL='<?!= appUrl ?>'; window.PARAMS=<?!= paramsJson ?>;</script>
+<?!= include('genko') ?>
+<?!= include('registry') ?>
+<?!= include('layout') ?>
+<?!= include('render') ?>
+<style>
+  main{padding:18px; overflow:auto; display:block;}
+  .box{background:#fff; border:1px solid var(--ui-line); border-radius:10px;
+       padding:14px; margin-bottom:16px;}
+  .box .ttl{font-size:13px; font-weight:700; display:block; margin-bottom:10px;}
+  .row{display:flex; gap:8px; flex-wrap:wrap; align-items:end;}
+  .row label{font-size:12px; color:#6b675e; display:flex; flex-direction:column; gap:4px;}
+  .row input,.row select{width:150px;}
+  table.ls{width:100%; border-collapse:collapse; background:#fff;
+           border-radius:10px; overflow:hidden;}
+  table.ls th,table.ls td{border-bottom:1px solid var(--ui-line); padding:8px 12px;
+                          font-size:14px; text-align:left; vertical-align:middle;}
+  table.ls th{background:#faf9f6; font-size:12px; color:#6b675e;}
+  table.ls tr:hover td{background:#faf9f6;}
+  table.ls td.ops{white-space:nowrap; text-align:right;}
+  table.ls td.ops button{padding:6px 10px; min-height:34px; margin-left:4px;}
+  select.pub{width:120px; min-height:34px; padding:5px;}
+  select.pub.today{background:var(--accent); color:#fff; border-color:var(--accent); font-weight:700;}
+  select.pub.on{border-color:var(--accent); color:var(--accent);}
+  .prog{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px;}
+  .pc{background:#fff; border:1px solid var(--ui-line); border-radius:10px; padding:10px;}
+  .pc.none{opacity:.6;}
+  .pc .nm{font-size:14px; font-weight:700;}
+  .pc .mt{font-size:12px; color:#6b675e; margin-top:4px;}
+  .bar{height:5px; background:var(--ui-bg); border-radius:3px; margin-top:6px; overflow:hidden;}
+  .bar i{display:block; height:100%; background:var(--accent);}
+  .star{min-height:26px; padding:2px 8px; font-size:12px; border-radius:99px;
+        line-height:1.2; margin-right:2px;}
+  .star.on{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700;}
+  h2{font-size:15px; margin:22px 0 10px;}
+  details.sub summary{font-size:13px; color:#6b675e; cursor:pointer; padding:6px 0;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ワークシート 教師用</h1>
+  <span class="sp crumb" id="crumb"></span>
+  <button id="imp" style="display:none">取り込み</button>
+  <button id="back" style="display:none">授業一覧へ</button>
+  <span class="msg" id="msg"></span>
+</header>
+
+<main id="main"></main>
+
+<script>
+var UID = param('u'), LNAME = param('l');
+
+function call(fn, args, onOk){
+  google.script.run
+    .withSuccessHandler(onOk || function(){ location.reload(); })
+    .withFailureHandler(function(e){ flash(e.message, true); })
+    [fn].apply(null, args);
+}
+function copyText(t){
+  var ta = document.createElement('textarea');
+  ta.value = t; document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); flash('コピーしました'); }
+  catch (e) { flash('コピーできませんでした', true); }
+  ta.remove();
+}
+
+/* ================= 一覧 =================
+   単元IDは内部で自動採番するので、教師には見せない。
+   単元は「授業を作る」の中で選ぶか、新しく打つだけでよい。 */
+function renderIndex(d){
+  $('imp').style.display = '';
+
+  var units = d.units.map(function(u){
+    return '<option value="' + esc(u.id) + '">' +
+           esc((u.grade ? u.grade + ' ' : '') + (u.subject ? u.subject + ' ' : '') + u.name) +
+           '</option>';
+  }).join('');
+
+  var h = '<div class="box"><span class="ttl">授業を作る</span><div class="row">' +
+    '<label>単元<select id="lu"><option value="">＋ 新しい単元</option>' + units + '</select></label>' +
+    '<span id="newu" style="display:' + (d.units.length ? 'none' : 'contents') + '">' +
+      '<label>教科<input type="text" id="usub" placeholder="理科"></label>' +
+      '<label>学年<input type="text" id="ugrd" placeholder="4年"></label>' +
+      '<label>単元名<input type="text" id="unam" placeholder="水のすがた"></label>' +
+    '</span>' +
+    '<label>授業名<input type="text" id="lnm" placeholder="03 すがたの変化" style="width:230px"></label>' +
+    '<button class="primary" id="mk">作る</button></div></div>';
+
+  h += '<table class="ls"><tr><th>授業</th><th>教科／単元</th><th>公開</th><th>順</th><th></th></tr>';
+  d.lessons.forEach(function(l){
+    var a = 'data-u="' + esc(l.unitId) + '" data-l="' + esc(l.name) + '"';
+    var cls = l.pub === '今日' ? 'pub today' : (l.pub ? 'pub on' : 'pub');
+    h += '<tr><td><b>' + esc(l.name) + '</b></td>' +
+         '<td>' + esc(l.grade + ' ' + l.subject) +
+         '<br><span class="note">' + esc(l.unit) + '</span></td>' +
+         '<td><select class="' + cls + '" data-pub ' + a + '>' +
+           '<option value=""'    + (l.pub === ''     ? ' selected' : '') + '>下書き</option>' +
+           '<option value="公開"' + (l.pub === '公開' ? ' selected' : '') + '>公開</option>' +
+           '<option value="今日"' + (l.pub === '今日' ? ' selected' : '') + '>今日の授業</option>' +
+         '</select></td>' +
+         '<td class="ops"><button data-mv="-1" ' + a + '>▲</button>' +
+         '<button data-mv="1" ' + a + '>▼</button></td>' +
+         '<td class="ops"><button class="primary" data-edit ' + a + '>編集</button>' +
+         '<button data-view ' + a + '>提出</button>' +
+         '<button data-ren ' + a + '>改名</button>' +
+         '<button class="danger" data-del ' + a + '>削除</button></td></tr>';
+  });
+  h += '</table>';
+  if (!d.lessons.length)
+    h += '<p class="note" style="margin-top:12px">まだ授業がありません。上で作ってください。</p>';
+
+  if (d.units.length){
+    h += '<details class="sub"><summary>単元の整理</summary>' +
+         '<table class="ls" style="margin-top:8px"><tr><th>単元</th><th></th></tr>';
+    d.units.forEach(function(u){
+      h += '<tr><td>' + esc(u.grade + ' ' + u.subject + ' ' + u.name) + '</td>' +
+           '<td class="ops"><button data-expu="' + esc(u.id) + '">まるごと書き出し</button>' +
+           '<button class="danger" data-unlink="' + esc(u.id) + '">一覧から外す</button></td></tr>';
+    });
+    h += '</table><p class="note" style="margin-top:8px">' +
+         '「一覧から外す」はスプレッドシート本体を消しません。児童の記録はフォルダに残ります。</p></details>';
+  }
+
+  $('main').innerHTML = h;
+  bindIndex();
+}
+
+function bindIndex(){
+  function each(sel, fn){ $('main').querySelectorAll(sel).forEach(fn); }
+
+  $('lu').addEventListener('change', function(){
+    $('newu').style.display = this.value ? 'none' : 'contents';
+  });
+  $('mk').addEventListener('click', function(){
+    this.disabled = true;
+    call('createLessonSmart', [{
+      unitId: $('lu').value,
+      subject: $('usub') ? $('usub').value : '',
+      grade:   $('ugrd') ? $('ugrd').value : '',
+      unitName:$('unam') ? $('unam').value : '',
+      name:    $('lnm').value
+    }], function(r){
+      navTo('?view=editor&u=' + encodeURIComponent(r.unitId) +
+            '&l=' + encodeURIComponent(r.name));
+    });
+  });
+
+  each('[data-edit]', function(b){ b.addEventListener('click', function(){
+    navTo('?view=editor&u=' + encodeURIComponent(this.dataset.u) +
+          '&l=' + encodeURIComponent(this.dataset.l)); }); });
+  each('[data-view]', function(b){ b.addEventListener('click', function(){
+    navTo('?view=teacher&u=' + encodeURIComponent(this.dataset.u) +
+          '&l=' + encodeURIComponent(this.dataset.l)); }); });
+  each('[data-mv]', function(b){ b.addEventListener('click', function(){
+    call('moveLesson', [this.dataset.u, this.dataset.l, +this.dataset.mv]); }); });
+  each('[data-ren]', function(b){ b.addEventListener('click', function(){
+    var n = prompt('新しい授業名', this.dataset.l);
+    if (n && n !== this.dataset.l) call('renameLesson', [this.dataset.u, this.dataset.l, n]); }); });
+  each('[data-del]', function(b){ b.addEventListener('click', function(){
+    if (!confirm('「' + this.dataset.l + '」を削除します。\n児童が書いた内容もすべて消えます。よろしいですか。')) return;
+    call('deleteLesson', [this.dataset.u, this.dataset.l]); }); });
+  each('[data-unlink]', function(b){ b.addEventListener('click', function(){
+    if (!confirm('この単元を一覧から外します。\nスプレッドシート本体は消えません。よろしいですか。')) return;
+    call('unlinkUnit', [this.dataset.unlink]); }); });
+  each('[data-expu]', function(b){ b.addEventListener('click', function(){
+    call('exportUnit', [this.dataset.expu], function(r){ copyText(JSON.stringify(r, null, 2)); }); }); });
+
+  /* 授業直前に一覧から1操作で「今日」にできるようにする */
+  each('[data-pub]', function(s){ s.addEventListener('change', function(){
+    var v = this.value;
+    call('setPublish', [this.dataset.u, this.dataset.l, v], function(){
+      flash(v === '今日' ? '今日の授業にしました' : (v ? '公開しました' : '下書きにしました'));
+      setTimeout(function(){ location.reload(); }, 700);
+    });
+  }); });
+}
+
+/* ================= 提出状況 ================= */
+function renderAnswers(d){
+  $('back').style.display = '';
+  $('crumb').textContent = d.meta.grade + ' ' + d.meta.subject + '／' + d.meta.unit + '／' + d.meta.name;
+  var done = d.rows.filter(function(r){ return r.filled > 0; }).length;
+
+  var h = '<div class="row">' +
+    '<button class="primary" id="collect">みんなの考えを並べる</button>' +
+    '<button id="open">この授業のシートを開く</button>' +
+    '<button id="exp">JSONを書き出す</button>' +
+    '<button id="reload">さいよみこみ</button>' +
+    '<span class="note">とりかかった児童 ' + done + ' / ' + d.rows.length +
+    '　集約対象 ' + d.total + ' 項目</span></div>' +
+    '<p class="note" style="margin:10px 0 0">このシートが回答の正本です。' +
+    '児童が保存するとこのシートに書き込まれます。シート上で直した内容は、' +
+    '児童が次にこの授業を開いたときに反映されます（開いている最中には入れ替わりません）。</p>';
+
+  h += '<h2>提出状況</h2><div class="prog">';
+  d.rows.forEach(function(r){
+    var pct = d.total ? Math.round(r.filled / d.total * 100) : 0;
+    h += '<div class="pc' + (r.filled ? '' : ' none') + '">' +
+         '<div class="nm">' +
+         '<button class="star' + (r.pick ? ' on' : '') + '" data-pick="' + esc(r.email) + '">' +
+         (r.pick ? r.pick : '☆') + '</button> ' + esc(r.name) + '</div>' +
+         '<div class="bar"><i style="width:' + Math.min(100, pct) + '%"></i></div>' +
+         '<div class="mt">' + r.filled + ' / ' + d.total + '　' +
+         esc(r.updated || 'みていしゅつ') + '</div></div>';
+  });
+  $('main').innerHTML = h + '</div>';
+
+  $('collect').addEventListener('click', function(){
+    navTo('?view=collect&u=' + encodeURIComponent(UID) + '&l=' + encodeURIComponent(LNAME)); });
+  $('open').addEventListener('click', function(){ window.open(d.sheetUrl, '_blank'); });
+
+  // ☆を押した順に番号が振られる。取り上げる相手と見せる順を1操作で決める。
+  $('main').querySelectorAll('[data-pick]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var em = this.dataset.pick, on = !this.classList.contains('on');
+      this.disabled = true;
+      google.script.run.withSuccessHandler(function(list){
+        var map = {};
+        list.forEach(function(p){ map[p.email.toLowerCase()] = p.n; });
+        d.rows.forEach(function(r){ r.pick = map[r.email.toLowerCase()] || 0; });
+        renderAnswers(d);
+      }).withFailureHandler(function(e){ flash(e.message, true); })
+        .togglePick(UID, LNAME, em, on);
+    });
+  });
+  $('reload').addEventListener('click', function(){ location.reload(); });
+  $('exp').addEventListener('click', function(){ copyText(exportJson(d.template)); });
+
+}
+
+$('back').addEventListener('click', function(){ navTo('?view=teacher'); });
+$('imp').addEventListener('click', function(){ navTo('?view=import'); });
+
+if (UID && LNAME){
+  google.script.run.withSuccessHandler(renderAnswers)
+    .withFailureHandler(function(e){ $('main').innerHTML = '<p class="empty">' + esc(e.message) + '</p>'; })
+    .listAnswers(UID, LNAME);
+} else {
+  google.script.run.withSuccessHandler(renderIndex)
+    .withFailureHandler(function(e){ $('main').innerHTML = '<p class="empty">' + esc(e.message) + '</p>'; })
+    .listIndex();
+}
+</script>
+</body>
+</html>

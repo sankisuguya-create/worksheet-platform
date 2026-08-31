@@ -1,0 +1,163 @@
+<script>
+/* ============================================================
+   render.html — ページ描画、画面遷移、回答の収集
+   種別ごとの違いは registry.html が持つ。ここには種別名を書かない。
+   ============================================================ */
+
+var PAGE_W = 1400, PAGE_H = 990;   // A4横の論理座標
+
+/* ---------- GASサンドボックス対応 ----------
+   ウェブアプリはiframe内で動くため、location にパラメータが入らず、
+   location を書き換えても遷移しない。必ず navTo / param を使う。 */
+function navTo(query){ window.open((window.APP_URL || '') + (query || ''), '_top'); }
+function param(k){ return (window.PARAMS && window.PARAMS[k]) || ''; }
+
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function $(id){ return document.getElementById(id); }
+
+/** メッセージ表示。要素id 'msg' を使う。 */
+function flash(text, isError){
+  var m = $('msg');
+  if (!m) return;
+  m.textContent = text;
+  m.className = 'msg' + (isError ? ' error' : '');
+  if (!isError && text) setTimeout(function(){ if (m.textContent === text) m.textContent = ''; }, 3500);
+}
+
+/** 論理ページを実画面に合わせて縮小する。倍率を返す。 */
+function fitStage(stage, wrap){
+  var s = Math.min((wrap.clientWidth - 24) / PAGE_W, (wrap.clientHeight - 24) / PAGE_H, 1);
+  if (!(s > 0.05)) s = 0.05;   // 描画前で高さが取れないときに負やゼロにしない
+  stage.style.transform = 'scale(' + s + ')';
+  wrap.dataset.scale = s;
+  return s;
+}
+
+
+/* ---------- 描画 ---------- */
+
+function objHtml(o, mode, ans){
+  var d = KIND[o.kind];
+  if (!d) return '';
+  var style = 'left:' + o.x + 'px;top:' + o.y + 'px;width:' + o.w + 'px;height:' + o.h + 'px;';
+  var inner = d.html(o, mode, ans) || '';
+
+  if (d.group === 'field'){
+    var ro = (mode !== 'input');
+    var ctl = (!ro && !d.noView) ? childCtl_(o) : '';
+    var cnt = (!ro && (o.showCount || o.maxChars)) ? '<span class="cnt"></span>' : '';
+    inner = '<div class="field' + (ro ? ' ro' : '') + '" data-fid="' + esc(o.id) + '">' +
+            '<div class="fl">' + esc(o.label) +
+            (o.required ? ' <span class="req">*</span>' : '') + cnt + ctl + '</div>' +
+            '<div class="fb">' + inner + '</div></div>';
+  }
+  return '<div class="ob ob-' + o.kind + '" data-id="' + esc(o.id) + '" style="' + style + '">' +
+         inner + '</div>';
+}
+
+/* 教師が「児童が選ぶ」にした項目にだけ、小さな切替を出す。
+   全部の欄に出すと画面が散らかるので、既定は教師固定。 */
+function childCtl_(o){
+  var b = '';
+  if (o.vertical === 'child')
+    b += '<button data-ctl="dir" title="たて／よこ">たて</button>';
+  if (o.fontMode === 'child')
+    b += '<button data-ctl="small">小</button><button data-ctl="big">大</button>';
+  return b ? '<span class="fctl">' + b + '</span>' : '';
+}
+
+function pageHtml(page, mode, ans){
+  return ((page && page.objects) || []).map(function(o){
+    return objHtml(o, mode, ans);
+  }).join('');
+}
+
+
+
+/* ---------- 見え方の配線 ---------- */
+
+/** 字数表示、枠に合わせた自動縮小、児童の切替。drawPage の最後で呼ぶ。 */
+function bindFieldView(stage, findObject){
+  stage.querySelectorAll('.field[data-fid]').forEach(function(f){
+    var o = findObject(f.getAttribute('data-fid'));
+    if (!o) return;
+    var box = f.querySelector('.fb');
+    var el = box.querySelector('input,textarea,select');
+    var cnt = f.querySelector('.cnt');
+
+    function count(){
+      if (!cnt || !el) return;
+      var n = String(el.value || '').replace(/《[^》]*》/g, '').replace(/\s/g, '').length;
+      cnt.textContent = o.maxChars ? (n + ' / ' + o.maxChars + ' 字') : (n + ' 字');
+      cnt.classList.toggle('over', !!o.maxChars && n >= o.maxChars);
+    }
+    /* 1pxずつ縮めるとレイアウト再計算が最大40回走る。
+       二分探索なら6回で収まる。打鍵のたびに走るので効く。 */
+    function fit(){
+      if (o.fontMode !== 'fit' || !el) return;
+      var hi = o.fontSize || 22, lo = 10;
+      el.style.fontSize = hi + 'px';
+      if (el.scrollHeight <= el.clientHeight + 1) return;
+      for (var i = 0; i < 6 && lo < hi; i++){
+        var mid = Math.floor((lo + hi) / 2);
+        el.style.fontSize = mid + 'px';
+        if (el.scrollHeight > el.clientHeight + 1) hi = mid; else lo = mid + 1;
+      }
+      el.style.fontSize = Math.max(10, lo - 1) + 'px';
+    }
+    if (el){
+      var t = null;
+      el.addEventListener('input', function(){
+        clearTimeout(t);
+        t = setTimeout(function(){ count(); fit(); }, 150);   // 打っている間はまとめる
+      });
+      count(); fit();
+    }
+
+    f.querySelectorAll('[data-ctl]').forEach(function(b){
+      b.addEventListener('click', function(e){
+        e.preventDefault();
+        var a = this.getAttribute('data-ctl');
+        if (!el) return;
+        if (a === 'dir'){
+          var now = el.style.writingMode === 'vertical-rl';
+          el.style.writingMode = now ? '' : 'vertical-rl';
+          el.style.textOrientation = now ? '' : 'mixed';
+          this.textContent = now ? 'たて' : 'よこ';
+        } else {
+          var cur = parseFloat(getComputedStyle(el).fontSize) || 22;
+          el.style.fontSize = Math.max(12, Math.min(48, cur + (a === 'big' ? 3 : -3))) + 'px';
+        }
+      });
+    });
+  });
+}
+
+/* ---------- 回答の収集 ----------
+   種別を見ずに、入力要素の型だけで拾う。
+   新しい種別を足しても、標準の入力要素を使う限りここは触らなくてよい。 */
+function readAnswers(root, base){
+  var out = {}, init = {};
+  for (var k in (base || {})) out[k] = base[k];
+
+  root.querySelectorAll('input[type=checkbox][data-id]').forEach(function(el){
+    var id = el.getAttribute('data-id');
+    if (!init[id]){ out[id] = []; init[id] = 1; }
+  });
+  root.querySelectorAll('[data-id]').forEach(function(el){
+    var id = el.getAttribute('data-id');
+    if (el.type === 'checkbox'){ if (el.checked) out[id].push(el.value); }
+    else if (el.type === 'radio'){ if (el.checked) out[id] = el.value; }
+    else out[id] = el.value;
+  });
+  root.querySelectorAll('[data-key]').forEach(function(el){
+    out[el.getAttribute('data-key')] = el.value;
+  });
+  return out;
+}
+</script>

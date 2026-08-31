@@ -1,0 +1,117 @@
+<script>
+/* ============================================================
+   genko.html — 縦書き組版と、原稿用紙の直接入力
+
+   表示（教師の確認・印刷）は組版してルビと行頭禁則を効かせる。
+   入力（児童）はマス目に重ねた縦書きのテキスト入力に直接打つ。
+   直接入力にした理由はレイアウトが崩れないこと。
+   代わりに、編集中はルビ記法《》が生の文字として見え、行頭禁則も効かない。
+   ============================================================ */
+
+var GENKO_KANJI = /[\u4E00-\u9FFF\u3005\u3006\u30F6]/;
+var GENKO_HANG  = '、。，．」』）】〉》”’!?！？ー…';   // 行頭に置けない＝前のマスへぶら下げ
+
+/** 文字列をトークン列にする。《》で直前の漢字列にルビを振る。 */
+function parseText(text){
+  var t = [], i = 0, g = 0;
+  text = String(text == null ? '' : text);
+  while (i < text.length){
+    var ch = text[i];
+    if (ch === '\r'){ i++; continue; }
+    if (ch === '\n'){ t.push({br:true}); i++; continue; }
+    if (ch === '《'){
+      var e = text.indexOf('》', i);
+      if (e > i){
+        var rt = text.slice(i + 1, e), base = [], k = t.length - 1;
+        while (k >= 0 && t[k].ch && GENKO_KANJI.test(t[k].ch)){ base.unshift(t[k]); k--; }
+        if (base.length && rt){
+          g++;
+          var n = base.length, pos = 0;
+          for (var b = 0; b < n; b++){
+            var take = Math.round(rt.length * (b + 1) / n) - pos;
+            base[b].ruby = rt.substr(pos, take);
+            base[b].g = g;
+            base[b].fullRuby = rt;
+            pos += take;
+          }
+        }
+        i = e + 1; continue;
+      }
+    }
+    t.push({ch: ch});
+    i++;
+  }
+  return t;
+}
+
+/** トークン列を列に割る。行頭禁則はぶら下げで処理する。 */
+function layoutColumns(tokens, rows){
+  var cols = [], cur = [];
+  function push(){ cols.push(cur); cur = []; }
+  for (var i = 0; i < tokens.length; i++){
+    var t = tokens[i];
+    t.idx = i;
+    if (t.br){
+      if (cur.length) push(); else cols.push([]);
+      cur = [{ch:'　', idx:i}];          // 改行のあとは1マス下げ
+      continue;
+    }
+    if (cur.length >= rows){
+      if (GENKO_HANG.indexOf(t.ch) >= 0 && cur.length){
+        cur[cur.length - 1].tail = t.ch;
+        continue;
+      }
+      push();
+    }
+    cur.push(t);
+  }
+  if (cur.length) push();
+  return cols;
+}
+
+/** 表示用。ルビと行頭禁則を効かせて組む。std のときは10列ごとに太罫を入れる。 */
+function genkoHtml(text, rows, colsMax, cellPx, std){
+  var cols = layoutColumns(parseText(text), rows);
+  var out = '<div class="genko' + (std ? ' std' : '') + '" style="--cell:' + cellPx + 'px">';
+  for (var c = 0; c < colsMax; c++){
+    out += '<div class="gcol' + (std && c > 0 && c % 10 === 0 ? ' mark' : '') + '">';
+    var col = cols[c] || [];
+    for (var r = 0; r < rows; r++){
+      var t = col[r];
+      if (!t){ out += '<div class="gcell"></div>'; continue; }
+      var body = '<span class="ch">' + esc(t.ch === ' ' ? '　' : t.ch) + '</span>';
+      if (t.ruby) body += '<span class="rb">' + esc(t.ruby) + '</span>';
+      if (t.tail) body += '<span class="tail">' + esc(t.tail) + '</span>';
+      out += '<div class="gcell">' + body + '</div>';
+    }
+    out += '</div>';
+  }
+  return out + '</div>';
+}
+
+/**
+ * マス目の寸法。3つの型を持つ。
+ *   fit   … 枠に収まる最大（既定）。紙面の都合を優先する
+ *   fixed … 教師が1マスの大きさを決める。枠からはみ出すとスクロールする
+ *   std   … 一般的な原稿用紙に準じる。20字×20行の400字詰に固定し、10列ごとに太罫を入れる
+ */
+function genkoDims(o){
+  var mode = o.sizeMode || 'fit';
+  var rows = o.rows || 10, cols = o.cols || 10, cell;
+  if (mode === 'std'){ rows = 20; cols = 20; }
+  var w = o.w - 16, h = o.h - 44;                 // ラベルと余白の分を引く
+  if (mode === 'fixed') cell = Math.max(10, o.cellPx || 24);
+  else cell = Math.max(8, Math.min(Math.floor(h / rows), Math.floor(w / cols)));
+  return {rows: rows, cols: cols, cell: cell, std: (mode === 'std')};
+}
+
+/** 後方互換。マス寸法だけが要るとき。 */
+function genkoCellPx(o){ return genkoDims(o).cell; }
+
+/** オブジェクトから直接、組版済みの原稿用紙を描く。 */
+function genkoView(o, text){
+  var d = genkoDims(o);
+  return genkoHtml(text, d.rows, d.cols, d.cell, d.std);
+}
+
+</script>

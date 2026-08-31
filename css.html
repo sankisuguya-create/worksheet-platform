@@ -1,0 +1,185 @@
+<style>
+/* ============================================================
+   css.html — 全画面で共有するスタイル
+   ページの論理座標は 1400 × 990（A4横 1.414:1）。実画面に合わせて縮小表示する。
+   ============================================================ */
+:root{
+  --ink:#1b1a17; --ui-bg:#f2f0eb; --ui-line:#d8d4cb; --accent:#2f5d50;
+  --paper:#fbf7ee; --rule:#c1553a; --rule-soft:#e6b8a9;
+  --page-w:1400px; --page-h:990px;
+}
+*{box-sizing:border-box;}
+html,body{height:100%; margin:0;}
+body{font-family:"Noto Sans JP","Hiragino Kaku Gothic ProN",sans-serif;
+     background:var(--ui-bg); color:var(--ink); display:flex; flex-direction:column;}
+
+/* ---- 部品 ---- */
+button{font:inherit; font-size:14px; padding:8px 14px; min-height:40px;
+       border:1px solid var(--ui-line); border-radius:8px; background:#fff; cursor:pointer;}
+button:hover{background:#f6f4ef;}
+button:focus-visible{outline:3px solid var(--accent); outline-offset:2px;}
+button:disabled{opacity:.5; cursor:default;}
+button.primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700;}
+button.primary:hover{background:#26493f;}
+button.on{background:var(--accent); border-color:var(--accent); color:#fff;}
+button.danger{color:#a8322a; border-color:#e3c4c0;}
+select,input[type=text],input[type=number],textarea{
+  font:inherit; font-size:14px; padding:8px; border:1px solid var(--ui-line);
+  border-radius:8px; background:#fff;}
+input:focus,textarea:focus,select:focus{outline:2px solid var(--accent); outline-offset:1px;}
+.msg{font-size:14px; font-weight:700; color:var(--accent);}
+.msg.error{color:#a8322a;}
+.note{font-size:12.5px; color:#6b675e; line-height:1.7;}
+.empty{padding:50px; text-align:center; color:#8a857b;}
+
+/* ---- 共通ヘッダ ---- */
+header{display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+       padding:9px 16px; background:#fff; border-bottom:1px solid var(--ui-line);}
+header h1{font-size:16px; margin:0;}
+header label{font-size:12px; color:#6b675e;}
+.sp{margin-right:auto;}
+.crumb{font-size:13px; color:#6b675e;}
+main{flex:1; display:flex; flex-direction:column; min-height:0;}
+
+/* ---- ステージ ---- */
+.stagewrap{flex:1; display:flex; align-items:flex-start; justify-content:center;
+           overflow:hidden; padding:12px;}
+.stage{position:relative; width:var(--page-w); height:var(--page-h);
+       background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.16);
+       transform-origin:top center; flex:none;}
+.tabs{display:flex; gap:6px; padding:8px 14px; background:#fff;
+      border-bottom:1px solid var(--ui-line); align-items:center; flex-wrap:wrap;}
+.tabs button{min-height:34px; padding:6px 12px;}
+
+/* ---- オブジェクト ---- */
+.ob{position:absolute;}
+.ob-text{padding:6px; white-space:pre-wrap; word-break:break-word; line-height:1.5;}
+.ob-box{border:3px solid var(--ink); border-radius:10px;}
+.ob-image img{width:100%; height:100%; object-fit:contain; display:block;}
+.ob svg{width:100%; height:100%; display:block; overflow:visible;}
+
+/* ---- 入力欄 ---- */
+.field{background:#fff; border:2px solid var(--accent); border-radius:8px;
+       padding:6px; display:flex; flex-direction:column; gap:4px; height:100%;}
+.field.ro{border-style:dashed;}
+.field .fl{font-size:15px; font-weight:700; color:var(--accent); line-height:1.2;}
+.field .fl .req{color:#a8322a;}
+.field .fb{flex:1; min-height:0; display:flex; flex-direction:column;}
+.field textarea,.field input[type=text],.field input[type=number],.field select{
+  width:100%; flex:1; font-size:22px; border:1px solid var(--ui-line); border-radius:6px;
+  padding:6px; resize:none; font-family:inherit;}
+.field .ans{font-size:21px; white-space:pre-wrap; overflow:auto;}
+.field .opts{display:flex; flex-direction:column; gap:6px; overflow:auto;}
+.field .opts.row{flex-direction:row; flex-wrap:wrap; gap:14px;}
+.field .opt{display:flex; align-items:center; gap:8px; cursor:pointer;}
+.field .opt input{flex:none;}
+.field .scale{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.field .scale .sc{display:flex; gap:12px;}
+.field .scale label{display:flex; flex-direction:column; align-items:center; gap:2px; cursor:pointer;}
+.field .scale.vert{flex-direction:column; align-items:flex-start;}
+.field .scale.vert .sc{flex-direction:column; gap:8px;}
+.field .scale.vert label{flex-direction:row; gap:8px;}
+
+/* 児童が自分で切り替えられる欄に出る小さな操作 */
+.field .fctl{display:flex; gap:4px; margin-left:auto;}
+.field .fctl button{min-height:24px; padding:1px 8px; font-size:12px; border-radius:6px;}
+.field .fl{display:flex; align-items:center; gap:6px;}
+.field .cnt{font-size:12px; color:#6b675e; font-weight:400;}
+.field .cnt.over{color:#a8322a; font-weight:700;}
+
+/* ---- 表 ---- */
+table.wt{width:100%; height:100%; border-collapse:collapse; background:#fff;}
+table.wt th,table.wt td{border:2px solid var(--ink); padding:2px; font-size:20px; text-align:center;}
+table.wt th{background:#eee9df; font-weight:700;}
+table.wt input{width:100%; height:100%; border:none; text-align:center;
+               font-family:inherit; background:transparent;}
+table.wt input:focus{outline:2px solid var(--accent);}
+
+/* ---- 原稿用紙 ---- */
+.genko{display:flex; flex-direction:row-reverse; align-items:flex-start;
+       gap:calc(var(--cell) * .42); --cell:34px;}
+.gcol{display:flex; flex-direction:column; width:var(--cell);
+      border-left:1px solid var(--rule-soft); border-right:1px solid var(--rule-soft);}
+.gcell{position:relative; width:var(--cell); height:var(--cell);
+       border-bottom:1px solid var(--rule-soft);
+       font-family:"Noto Serif JP","Hiragino Mincho ProN",serif;}
+.gcell:first-child{border-top:1px solid var(--rule-soft);}
+.gcell .ch{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+           writing-mode:vertical-rl; text-orientation:mixed;
+           font-size:calc(var(--cell) * .76); line-height:1;}
+.gcell .rb{position:absolute; top:0; height:100%;
+           left:calc(var(--cell) * .98); width:calc(var(--cell) * .40);
+           display:flex; align-items:center; justify-content:center;
+           writing-mode:vertical-rl; font-size:calc(var(--cell) * .30);
+           line-height:1; color:#4a463f; white-space:nowrap;}
+.gcell .tail{position:absolute; left:0; width:100%;
+             top:calc(var(--cell) * .70); height:calc(var(--cell) * .40);
+             display:flex; align-items:center; justify-content:center;
+             writing-mode:vertical-rl; font-size:calc(var(--cell) * .76); line-height:1;}
+/* 原稿用紙への直接入力。マス目の上に縦書きの入力欄を透明で重ねる。
+   桁が合うのは font-size と line-height をマス寸法に一致させているため。
+   等幅の日本語フォントでないとずれる。 */
+.genkoin{position:relative; margin:0 auto;}
+.genkoin .gbg{position:absolute; inset:0;}
+.genkoin .gin{
+  position:absolute; inset:0; width:100%; height:100%;
+  writing-mode:vertical-rl; text-orientation:mixed;
+  font-family:"Noto Sans Mono CJK JP","Noto Sans JP","MS Gothic",monospace;
+  font-size:var(--cell); line-height:var(--cell);
+  letter-spacing:0; padding:0; margin:0; border:none; background:transparent;
+  color:var(--ink); resize:none; overflow:hidden; caret-color:var(--accent);
+}
+.genkoin .gin:focus{outline:2px solid var(--accent); outline-offset:2px;}
+.genkopv{overflow:auto; background:var(--paper); border-radius:6px; padding:6px;
+         display:flex; justify-content:center; height:100%;}
+/* 一般的な原稿用紙。10列ごとに太罫を入れる */
+.genko.std .gcol.mark{border-right:2px solid var(--rule);}
+
+/* 紙面には原稿用紙だけを置き、押すと下から書き込みの帯が出る */
+.genkotap{position:relative; height:100%; cursor:pointer;}
+.genkotap .gopen{position:absolute; right:6px; bottom:6px;
+  background:var(--accent); color:#fff; font-size:13px; font-weight:700;
+  padding:5px 12px; border-radius:99px; pointer-events:none;}
+.field.ro .genkotap{cursor:default;}
+.field.ro .genkotap .gopen{display:none;}
+
+/* 書き込みは画面の左に寄せる。ワークシートの外なので紙面が崩れない。
+   下に置くと紙面の高さが減って倍率が落ちる（1280×800で 0.52 まで下がる）。
+   左に置けば減るのは幅だけで、0.64 を保てる。 */
+.writer{position:fixed; left:0; top:0; bottom:0; width:var(--writer-w,360px); z-index:40;
+  background:#fff; border-right:2px solid var(--accent);
+  box-shadow:3px 0 14px rgba(0,0,0,.14); padding:12px 14px;
+  display:none; flex-direction:column; gap:8px;}
+.writer.on{display:flex;}
+.writer .dh{display:flex; align-items:center; gap:8px; font-size:16px; font-weight:700;
+  flex-wrap:wrap;}
+.writer .dh .cnt{font-size:13px; color:#6b675e; font-weight:400;}
+.writer .dh .cnt.over{color:#a8322a; font-weight:700;}
+.writer textarea{flex:1; width:100%; font-size:19px; line-height:1.9; resize:none;}
+.writer .hint{font-size:12px; color:#6b675e; line-height:1.6;}
+body.writing .stagewrap,body.writing .pager,body.writing header{margin-left:var(--writer-w,360px);}
+@media (max-width:900px){ :root{--writer-w:300px;} }
+.genkopv{flex:1; overflow:auto; background:var(--paper); border-radius:6px; padding:6px;
+         display:flex; justify-content:center;}
+
+/* ---- カード（一覧） ---- */
+.cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px;}
+.card{background:#fff; border:1px solid var(--ui-line); border-radius:10px;
+      padding:14px; cursor:pointer; text-align:left; min-height:64px;}
+.card:hover{border-color:var(--accent);}
+.card .s{font-size:12px; color:#6b675e; display:block;}
+.card .m{font-size:16px; font-weight:700; margin-top:4px; display:block;}
+
+/* 未記入の欄へ飛んだときに知らせる */
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(193,85,58,0);}
+                 50%{box-shadow:0 0 0 8px rgba(193,85,58,.45);}}
+.ob.pulse .field{animation:pulse 1.1s ease-in-out 2;}
+
+/* 児童のページ送り。タブより大きく、下に置く */
+.pager{display:flex; gap:12px; justify-content:center; align-items:center;
+       padding:10px 14px 16px; background:transparent;}
+.pager button{min-height:52px; font-size:17px; font-weight:700; padding:10px 26px;}
+.pager .n{font-size:15px; color:#6b675e;}
+
+@media (prefers-reduced-motion:reduce){*{transition:none !important; animation:none !important;}}
+</style>

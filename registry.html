@@ -1,0 +1,410 @@
+<script>
+/* ============================================================
+   registry.html — オブジェクト種別の定義
+
+   ★ 新しい種類を足すときは KIND に1つ追加するだけでよい。
+     ツールバー、既定値、描画、設定画面、集約列、取り込み案内が自動で追随する。
+
+   定義の意味
+     group : 'place'（教師のみ配置）／'field'（児童が入力）
+     common: true なら道具の「よく使う」に出る。無ければ「そのほか」
+     def   : 新規作成時の既定値。w, h は必須
+     multi : true なら回答が配列（保存時カンマ区切り／読込時に配列へ戻る）
+             テンプレートに書き込まれ、サーバはこれを見る。消さないこと
+     props : 設定画面の項目。t は text/number/textarea/bool/select/lines/csv/cells
+     html  : 描画。group が 'field' なら中身だけを返す（枠とラベルは render.html）
+   ============================================================ */
+
+/* 入力欄が共通で持つ見え方の設定。
+   「児童」を選ぶと、その欄にだけ小さな切替が出る。
+   既定は教師固定。全部の欄に切替を出すと児童画面が散らかるため。 */
+var VIEW_PROPS = [
+  {k: 'vertical', t: 'select', l: '書く向き',
+   opts: [['h','横書き'], ['v','縦書き'], ['child','児童が選ぶ']]},
+  {k: 'fontMode', t: 'select', l: '文字の大きさ',
+   opts: [['fixed','固定'], ['fit','枠に合わせて縮む'], ['child','児童が選ぶ']]},
+  {k: 'fontSize', t: 'number', l: '大きさ（固定のとき）'},
+  {k: 'maxChars', t: 'number', l: '字数の上限（0で無制限）'},
+  {k: 'showCount', t: 'bool', l: '字数を表示する'}
+];
+var VIEW_DEF = {vertical: 'h', fontMode: 'fixed', fontSize: 22, maxChars: 0, showCount: false};
+
+/* 選択肢を出す欄が共通で持つ設定 */
+var CHOICE_PROPS = [
+  {k: 'orient', t: 'select', l: '並べる向き', opts: [['v','たて'], ['h','よこ']]},
+  {k: 'btnSize', t: 'number', l: 'ボタンの大きさ'},
+  {k: 'optSize', t: 'number', l: '選択肢の文字の大きさ'}
+];
+var CHOICE_DEF = {orient: 'v', btnSize: 24, optSize: 22};
+
+
+var KIND = {
+
+  /* ---------- 配置物（教師のみ） ---------- */
+
+  text: {
+    group: 'place', common: true, label: 'テキスト',
+    def: {w: 420, h: 60, text: 'テキスト', size: 28, align: 'left',
+          valign: 'top', vertical: false, bold: false},
+    props: [
+      {k: 'text',     t: 'textarea', l: '文字', rows: 4},
+      {k: 'size',     t: 'number',   l: '大きさ'},
+      {k: 'align',    t: 'select',   l: '横のそろえ',
+       opts: [['left','左'], ['center','中央'], ['right','右']]},
+      {k: 'valign',   t: 'select',   l: '縦のそろえ',
+       opts: [['top','上'], ['middle','中央'], ['bottom','下']]},
+      {k: 'vertical', t: 'bool',     l: '縦書きにする'},
+      {k: 'bold',     t: 'bool',     l: '太字'}
+    ],
+    html: function(o){
+      var jc = {top:'flex-start', middle:'center', bottom:'flex-end'}[o.valign || 'top'];
+      var st = 'font-size:' + (o.size || 28) + 'px;font-weight:' + (o.bold ? 700 : 400) +
+               ';text-align:' + (o.align || 'left') + ';';
+      var outer = 'height:100%;display:flex;';
+      if (o.vertical){
+        // 縦書きでは、横のそろえが「行の並び」、縦のそろえが「文字の始まり」になる
+        var ai = {left:'flex-end', center:'center', right:'flex-start'}[o.align || 'left'];
+        outer += 'flex-direction:row;justify-content:' + (jc === 'flex-start' ? 'flex-start' : jc) +
+                 ';align-items:' + ai + ';';
+        st += 'writing-mode:vertical-rl;text-orientation:mixed;text-align:start;';
+      } else {
+        outer += 'flex-direction:column;justify-content:' + jc + ';';
+      }
+      return '<div style="' + outer + '"><div class="ob-text" style="' + st + '">' +
+             esc(o.text) + '</div></div>';
+    }
+  },
+
+  box: {
+    group: 'place', common: true, label: '囲み',
+    def: {w: 500, h: 300},
+    props: [],
+    html: function(){ return ''; }
+  },
+
+  image: {
+    group: 'place', common: true, label: '画像',
+    def: {w: 360, h: 240, src: ''},
+    props: [{k: 'src', t: 'text', l: '画像URL（Driveの共有リンク等）'}],
+    html: function(o){ return o.src ? '<img src="' + esc(o.src) + '" alt="">' : ''; }
+  },
+
+  /**
+   * 表。セルごとに「見出し／文字／記入欄」を選べる。
+   * cells は "r,c" をキーにした差分。書かれていないセルは既定に従う
+   * （0行目＝見出し、それ以外＝記入欄）。行や列を増やしても既存の設定が残る。
+   */
+  table: {
+    group: 'place', common: true, label: '表',
+    def: {w: 640, h: 260, rows: 4, cols: 3, heads: ['','',''], collect: true,
+          cells: {}, tSize: 20, tVertical: false},
+    props: [
+      {k: 'rows',      t: 'number', l: '行数'},
+      {k: 'cols',      t: 'number', l: '列数'},
+      {k: 'heads',     t: 'csv',    l: '見出し（カンマ区切り）'},
+      {k: 'tSize',     t: 'number', l: '文字の大きさ'},
+      {k: 'tVertical', t: 'bool',   l: 'セルを縦書きにする'},
+      {k: 'cells',     t: 'cells',  l: 'セルごとの種類'}
+    ],
+    collectable: true,
+    html: function(o, mode, ans){
+      var rows = o.rows || 3, cols = o.cols || 3;
+      var ro = (mode !== 'input');
+      var vs = o.tVertical ? 'writing-mode:vertical-rl;text-orientation:mixed;' : '';
+      var fs = 'font-size:' + (o.tSize || 20) + 'px;' + vs;
+      var h = '<table class="wt">';
+      for (var r = 0; r < rows; r++){
+        h += '<tr>';
+        for (var c = 0; c < cols; c++){
+          var cell = tableCell(o, r, c);
+          var key = o.id + ':' + r + ':' + c;
+          if (cell.t === 'head'){
+            h += '<th style="' + fs + '">' + esc(cell.text) + '</th>';
+          } else if (cell.t === 'text'){
+            h += '<td style="' + fs + '">' + esc(cell.text) + '</td>';
+          } else {
+            var v = ans ? (ans[key] || '') : '';
+            h += '<td>' + (ro
+              ? '<span style="' + fs + '">' + esc(v) + '</span>'
+              : '<input type="text" data-key="' + esc(key) + '" value="' + esc(v) +
+                '" style="' + fs + '"' +
+                (o.maxChars ? ' maxlength="' + o.maxChars + '"' : '') + '>') + '</td>';
+          }
+        }
+        h += '</tr>';
+      }
+      return h + '</table>';
+    }
+  },
+
+  line: {
+    group: 'place', label: '線',
+    def: {w: 300, h: 8, dir: '\\'},
+    props: [{k: 'dir', t: 'select', l: '向き',
+             opts: [['\\','左上→右下'], ['/','左下→右上']]}],
+    html: function(o){ return svgLine_(o, false); }
+  },
+
+  arrow: {
+    group: 'place', label: '矢印',
+    def: {w: 300, h: 8, dir: '\\'},
+    props: [{k: 'dir', t: 'select', l: '向き',
+             opts: [['\\','左上→右下'], ['/','左下→右上']]}],
+    html: function(o){ return svgLine_(o, true); }
+  },
+
+  /* ---------- 入力欄（児童が書く） ---------- */
+
+  in_short: {
+    group: 'field', common: true, label: '短文',
+    def: {w: 420, h: 110},
+    props: [],
+    html: function(o, mode, ans){
+      var v = val_(ans, o.id);
+      if (mode !== 'input') return '<div class="ans" style="' + textStyle_(o) + '">' + esc(v) + '</div>';
+      return '<input type="text" data-id="' + esc(o.id) + '" value="' + esc(v) +
+             '" style="' + textStyle_(o) + '"' + maxAttr_(o) + '>';
+    }
+  },
+
+  in_long: {
+    group: 'field', common: true, label: '長文',
+    def: {w: 420, h: 220},
+    props: [],
+    html: function(o, mode, ans){
+      var v = val_(ans, o.id);
+      if (mode !== 'input') return '<div class="ans" style="' + textStyle_(o) + '">' + esc(v) + '</div>';
+      return '<textarea data-id="' + esc(o.id) + '" style="' + textStyle_(o) + '"' +
+             maxAttr_(o) + '>' + esc(v) + '</textarea>';
+    }
+  },
+
+  in_number: {
+    group: 'field', label: '数値',
+    def: {w: 300, h: 110},
+    props: [],
+    html: function(o, mode, ans){
+      var v = val_(ans, o.id);
+      if (mode !== 'input') return '<div class="ans" style="' + textStyle_(o) + '">' + esc(v) + '</div>';
+      return '<input type="number" data-id="' + esc(o.id) + '" value="' + esc(v) +
+             '" style="' + textStyle_(o) + '">';
+    }
+  },
+
+  /**
+   * 原稿用紙。マス目に直接打つ。
+   * 表示（教師の確認・印刷）だけ組版してルビと行頭禁則を効かせる。
+   */
+  /**
+   * 原稿用紙。紙面には組版済みのマス目だけを置く。
+   * 書き込みは画面下から出る帯（ドロワー）で行う。
+   * ワークシートの中に入力欄を置くとレイアウトが崩れるため、外へ出してある。
+   */
+  in_genko: {
+    group: 'field', label: '原稿用紙(縦書き)',
+    def: {w: 460, h: 460, rows: 12, cols: 10, cellPx: 24, sizeMode: 'fit'},
+    props: [
+      {k: 'sizeMode', t: 'select', l: 'マスの大きさ',
+       opts: [['fit','枠に合わせる'], ['fixed','固定'], ['std','原稿用紙（20字×20行）']]},
+      {k: 'cellPx', t: 'number', l: '1マスの大きさ（固定のとき）'},
+      {k: 'rows',   t: 'number', l: '1列の字数（原稿用紙のときは20固定）'},
+      {k: 'cols',   t: 'number', l: '列数（原稿用紙のときは20固定）'},
+      {k: 'maxChars',  t: 'number', l: '字数の上限（0で無制限）'},
+      {k: 'showCount', t: 'bool',   l: '字数を表示する'}
+    ],
+    noView: true,          // 書く向き・文字サイズは原稿用紙が決めるので出さない
+    html: function(o, mode, ans){
+      var v = val_(ans, o.id);
+      var pv = '<div class="genkopv">' + genkoView(o, v) + '</div>';
+      if (mode !== 'input') return pv;
+      return '<div class="genkotap" data-open="' + esc(o.id) + '">' + pv +
+             '<span class="gopen">ここを おして 書く</span></div>';
+    }
+  },
+
+  in_radio: {
+    group: 'field', common: true, label: '単一選択',
+    def: {w: 420, h: 200, options: ['ア','イ','ウ']},
+    props: [{k: 'options', t: 'lines', l: '選択肢（1行1つ）', rows: 5}],
+    choice: true,
+    html: function(o, mode, ans){ return choiceHtml_(o, mode, ans, false); }
+  },
+
+  in_check: {
+    group: 'field', common: true, label: '複数選択',
+    def: {w: 420, h: 200, options: ['ア','イ','ウ'], multi: true},
+    multi: true, choice: true,
+    props: [{k: 'options', t: 'lines', l: '選択肢（1行1つ・カンマは使えません）', rows: 5}],
+    html: function(o, mode, ans){ return choiceHtml_(o, mode, ans, true); }
+  },
+
+  in_select: {
+    group: 'field', label: 'プルダウン',
+    def: {w: 360, h: 110, options: ['ア','イ','ウ']},
+    choice: true,
+    props: [{k: 'options', t: 'lines', l: '選択肢（1行1つ）', rows: 5}],
+    html: function(o, mode, ans){
+      var v = val_(ans, o.id), ro = (mode !== 'input');
+      var st = 'font-size:' + (o.optSize || 22) + 'px;' +
+               (o.orient === 'h' ? '' : '') +
+               (o.vertical === 'v' ? 'writing-mode:vertical-rl;' : '');
+      var h = '<select data-id="' + esc(o.id) + '" style="' + st + '"' +
+              (ro ? ' disabled' : '') + '><option value=""></option>';
+      (o.options || []).forEach(function(op){
+        h += '<option' + (v === op ? ' selected' : '') + '>' + esc(op) + '</option>';
+      });
+      return h + '</select>';
+    }
+  },
+
+  in_scale: {
+    group: 'field', label: '目盛り',
+    def: {w: 460, h: 130, min: 1, max: 5, minLabel: '', maxLabel: ''},
+    choice: true,
+    props: [
+      {k: 'min',      t: 'number', l: '最小'},
+      {k: 'max',      t: 'number', l: '最大'},
+      {k: 'minLabel', t: 'text',   l: '左（上）のことば'},
+      {k: 'maxLabel', t: 'text',   l: '右（下）のことば'}
+    ],
+    html: function(o, mode, ans){
+      var v = val_(ans, o.id), ro = (mode !== 'input');
+      var mn = (o.min == null ? 1 : o.min), mx = (o.max == null ? 5 : o.max);
+      var vert = (o.orient === 'v');
+      var bs = o.btnSize || 24, fs = o.optSize || 18;
+      var h = '<div class="scale' + (vert ? ' vert' : '') + '" style="font-size:' + fs + 'px">' +
+              '<span>' + esc(o.minLabel) + '</span><span class="sc">';
+      for (var s = mn; s <= mx; s++){
+        h += '<label><span>' + s + '</span><input type="radio" name="' + esc(o.id) +
+             '" data-id="' + esc(o.id) + '" value="' + s + '"' +
+             ' style="width:' + bs + 'px;height:' + bs + 'px"' +
+             (String(v) === String(s) ? ' checked' : '') + (ro ? ' disabled' : '') + '></label>';
+      }
+      return h + '</span><span>' + esc(o.maxLabel) + '</span></div>';
+    }
+  }
+};
+
+
+/* ---------- レジストリから導かれるもの ---------- */
+
+function kindsOf(group, tier){
+  var out = [];
+  for (var k in KIND){
+    if (KIND[k].group !== group) continue;
+    if (tier === 'common' && !KIND[k].common) continue;
+    if (tier === 'rest' && KIND[k].common) continue;
+    out.push(k);
+  }
+  return out;
+}
+function isField(k){ return !!(KIND[k] && KIND[k].group === 'field'); }
+function kindLabel(k){ return (KIND[k] && KIND[k].label) || k; }
+
+function makeObject(kind, id){
+  var d = KIND[kind];
+  if (!d) throw new Error('不明な種類です: ' + kind);
+  var o = {id: id, kind: kind, x: 120, y: 120, w: 200, h: 100};
+  function copy(src){
+    for (var k in src){
+      var v = src[k];
+      o[k] = (v instanceof Array) ? v.slice()
+           : (v && typeof v === 'object') ? JSON.parse(JSON.stringify(v)) : v;
+    }
+  }
+  if (d.group === 'field' && !d.noView) copy(VIEW_DEF);
+  if (d.choice) copy(CHOICE_DEF);
+  copy(d.def);
+  if (d.group === 'field'){
+    if (o.label == null) o.label = d.label;
+    if (o.collect == null) o.collect = true;
+    if (o.required == null) o.required = false;
+  }
+  return o;
+}
+
+/** 設定画面に出す項目。共通項目はここで足す。 */
+function propsOf(kind){
+  var d = KIND[kind] || {};
+  var out = [];
+  if (d.group === 'field') out.push({k: 'label', t: 'text', l: 'ラベル（シートの列名）'});
+  out = out.concat(d.props || []);
+  if (d.choice) out = out.concat(CHOICE_PROPS);
+  if (d.group === 'field' && !d.noView) out = out.concat(VIEW_PROPS);
+  if (d.group === 'field'){
+    out.push({k: 'required', t: 'bool', l: '必須'});
+    out.push({k: 'collect',  t: 'bool', l: '集約対象'});
+  } else if (d.collectable){
+    out.push({k: 'maxChars', t: 'number', l: 'セルの字数上限（0で無制限）'});
+    out.push({k: 'collect',  t: 'bool',   l: '集約対象'});
+  }
+  return out;
+}
+
+/** 表のセル設定。既定は0行目が見出し、以降は記入欄。 */
+function tableCell(o, r, c){
+  var d = (o.cells || {})[r + ',' + c];
+  if (d && d.t) return {t: d.t, text: d.text == null ? headOf(o, r, c) : d.text};
+  return (r === 0) ? {t: 'head', text: (o.heads || [])[c] || ''} : {t: 'input', text: ''};
+}
+function headOf(o, r, c){ return (r === 0) ? ((o.heads || [])[c] || '') : ''; }
+
+/** 集約対象になる表のセル。列名は「見出し_行番号」。 */
+function tableCells(o){
+  var out = [];
+  for (var r = 0; r < (o.rows || 1); r++)
+    for (var c = 0; c < (o.cols || 1); c++)
+      if (tableCell(o, r, c).t === 'input')
+        out.push({r: r, c: c, label: ((o.heads || [])[c] || ('列' + (c + 1))) + '_' + r});
+  return out;
+}
+
+
+/* ---------- 種別定義で使う小道具 ---------- */
+
+function val_(ans, id){
+  var v = ans ? ans[id] : '';
+  return (v == null) ? '' : v;
+}
+function maxAttr_(o){ return o.maxChars ? ' maxlength="' + o.maxChars + '"' : ''; }
+
+/** 入力欄の見え方。児童が選べる場合の初期値もここで決まる。 */
+function textStyle_(o){
+  var st = '';
+  var mode = (o.fontMode === 'child') ? 'fixed' : (o.fontMode || 'fixed');
+  if (mode === 'fixed') st += 'font-size:' + (o.fontSize || 22) + 'px;';
+  else st += 'font-size:' + (o.fontSize || 22) + 'px;';   // 縮小はJSが後から効かせる
+  var v = (o.vertical === 'child') ? 'h' : (o.vertical || 'h');
+  if (v === 'v') st += 'writing-mode:vertical-rl;text-orientation:mixed;';
+  return st;
+}
+
+function choiceHtml_(o, mode, ans, multi){
+  var raw = val_(ans, o.id), ro = (mode !== 'input');
+  var sel = multi ? (raw instanceof Array ? raw : (raw ? [raw] : [])) : raw;
+  var bs = o.btnSize || 24, fs = o.optSize || 22;
+  var h = '<div class="opts' + (o.orient === 'h' ? ' row' : '') +
+          '" style="font-size:' + fs + 'px">';
+  (o.options || []).forEach(function(op){
+    var on = multi ? (sel.indexOf(op) >= 0) : (sel === op);
+    h += '<label class="opt"><input type="' + (multi ? 'checkbox' : 'radio') +
+         '" name="' + esc(o.id) + '" data-id="' + esc(o.id) + '" value="' + esc(op) + '"' +
+         ' style="width:' + bs + 'px;height:' + bs + 'px"' +
+         (on ? ' checked' : '') + (ro ? ' disabled' : '') + '>' + esc(op) + '</label>';
+  });
+  return h + '</div>';
+}
+
+function svgLine_(o, arrow){
+  var up = (o.dir === '/');
+  var x1 = 0, y1 = up ? o.h : 0, x2 = o.w, y2 = up ? 0 : o.h;
+  var mk = arrow
+    ? '<defs><marker id="ah' + esc(o.id) + '" markerWidth="10" markerHeight="8" ' +
+      'refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="currentColor"/>' +
+      '</marker></defs>' : '';
+  return '<svg viewBox="0 0 ' + o.w + ' ' + o.h + '" style="color:var(--ink)">' + mk +
+         '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 +
+         '" stroke="currentColor" stroke-width="4" stroke-linecap="round"' +
+         (arrow ? ' marker-end="url(#ah' + esc(o.id) + ')"' : '') + '/></svg>';
+}
+</script>

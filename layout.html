@@ -1,0 +1,145 @@
+<script>
+/* ============================================================
+   layout.html — 座標の自動配置と、取り込みJSONの正規化
+
+   取り込み用JSONでは x,y,w,h を省略できる。省略された分だけ自動で流し込む。
+   座標計算を人（や生成AI）にさせないための仕掛けで、
+   「入力欄の並びとラベルだけ書けば授業になる」状態を作る。
+
+   種別の既定寸法は registry.html の KIND.def を使う。
+   そのためこの処理はサーバではなくクライアントに置いてある。
+   ============================================================ */
+
+var LAY = {margin: 60, gap: 24, gutter: 40};
+
+/** layout: '1col'（既定）か '2col'。x と y が両方ある物は動かさない。 */
+function autoLayout(tpl){
+  var mode = tpl.layout || '1col';
+  (tpl.pages || []).forEach(function(p){ layoutPage_(p, mode); });
+  return tpl;
+}
+
+function layoutPage_(page, mode){
+  var cols = (mode === '2col') ? 2 : 1;
+  var full = PAGE_W - LAY.margin * 2;
+  var colW = (cols === 2) ? (full - LAY.gutter) / 2 : full;
+  var y = [];
+  for (var i = 0; i < cols; i++) y.push(LAY.margin);
+
+  (page.objects || []).forEach(function(o){
+    var def = (KIND[o.kind] && KIND[o.kind].def) || {};
+    var wide = o.full || (o.w != null && o.w > colW + 1);
+    if (o.h == null) o.h = def.h || 120;
+    if (o.w == null) o.w = wide ? full : colW;
+
+    if (o.x != null && o.y != null) return;        // 明示された位置は尊重する
+
+    if (wide){
+      var top = Math.max.apply(null, y);
+      o.x = LAY.margin; o.y = top; o.w = full;
+      for (var k = 0; k < cols; k++) y[k] = top + o.h + LAY.gap;
+    } else {
+      var c = 0;
+      for (var j = 1; j < cols; j++) if (y[j] < y[c]) c = j;
+      o.x = LAY.margin + c * (colW + LAY.gutter);
+      o.y = y[c];
+      o.w = colW;
+      y[c] = o.y + o.h + LAY.gap;
+    }
+  });
+}
+
+
+/* ---------- 取り込みの正規化 ---------- */
+
+var IMPORT_SEQ = 0;
+function newId_(){
+  IMPORT_SEQ++;
+  return 'i' + Date.now().toString(36) + IMPORT_SEQ.toString(36);
+}
+
+/**
+ * 取り込みJSONを、そのまま保存できるテンプレートに直す。
+ * 受け付ける形
+ *   {pages:[{objects:[...]}]}      … 通常
+ *   {objects:[...]}                … 1ページのときの省略形
+ * 返り値 {template, warnings}
+ */
+function normalizeTemplate(obj){
+  var j = obj;
+  if (j && j.objects && !j.pages) j = {layout: j.layout, objects: undefined, pages: [{objects: obj.objects}]};
+  if (!j || !(j.pages instanceof Array) || !j.pages.length)
+    throw new Error('pages（または objects）がありません。');
+
+  var warn = [], ids = {};
+  var pages = j.pages.map(function(p, pi){
+    if (!p || !(p.objects instanceof Array))
+      throw new Error((pi + 1) + 'ページの objects が配列ではありません。');
+
+    var objs = [];
+    p.objects.forEach(function(src){
+      if (!src || !src.kind || !KIND[src.kind]){
+        warn.push((pi + 1) + 'ページ：知らない種類なので飛ばしました（' +
+                  (src && src.kind ? src.kind : '種類なし') + '）');
+        return;
+      }
+      var id = src.id && !ids[src.id] ? src.id : newId_();
+      ids[id] = 1;
+      var o = makeObject(src.kind, id);
+
+      // 指定された項目だけ上書きし、無い座標は消して自動配置に回す
+      for (var k in src) if (src[k] !== undefined && k !== 'id') o[k] = src[k];
+      o.id = id;
+      ['x','y','w','h'].forEach(function(k){ if (src[k] == null) delete o[k]; });
+
+      if (KIND[src.kind].multi){
+        o.multi = true;
+        // 選択肢のカンマはシートの保存形式と衝突する。取り除いて知らせる。
+        var before = (o.options || []).join('\u0001');
+        o.options = (o.options || []).map(function(s){ return String(s).replace(/[,、]/g, ''); });
+        if (o.options.join('\u0001') !== before)
+          warn.push((pi + 1) + 'ページ：選択肢からカンマを取り除きました');
+      }
+      if (KIND[src.kind].group === 'field' && !String(o.label || '').trim()){
+        o.label = KIND[src.kind].label;
+        warn.push((pi + 1) + 'ページ：ラベルが空だったので「' + o.label + '」を入れました');
+      }
+      objs.push(o);
+    });
+    return {objects: objs};
+  });
+
+  var tpl = {v: 1, layout: j.layout || '1col', pages: pages};
+  autoLayout(tpl);
+
+  // はみ出しは知らせるだけ。勝手にページを増やすと教師が驚くため。
+  tpl.pages.forEach(function(p, pi){
+    p.objects.forEach(function(o){
+      if (o.y + o.h > PAGE_H)
+        warn.push((pi + 1) + 'ページ：「' + (o.label || o.text || o.kind) +
+                  '」が下にはみ出しています。高さを調整してください。');
+    });
+  });
+  return {template: tpl, warnings: warn};
+}
+
+/** 取り込み前の要約。適用してよいか教師が判断するための材料。 */
+function summarize(tpl){
+  var pages = tpl.pages.length, objs = 0, fields = [];
+  tpl.pages.forEach(function(p){
+    objs += p.objects.length;
+    p.objects.slice().sort(function(a,b){ return (a.y-b.y)||(a.x-b.x); }).forEach(function(o){
+      if (KIND[o.kind] && KIND[o.kind].group === 'field' && o.collect)
+        fields.push(o.label);
+      if (o.kind === 'table' && o.collect)
+        fields.push('（表）' + (o.heads || []).join('・'));
+    });
+  });
+  return {pages: pages, objects: objs, fields: fields};
+}
+
+/** 書き出し。読みやすいように整形する。 */
+function exportJson(tpl){
+  return JSON.stringify(tpl, null, 2);
+}
+</script>

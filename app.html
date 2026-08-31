@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top"><meta charset="utf-8">
+<?!= include('css') ?>
+<script>window.APP_URL='<?!= appUrl ?>'; window.PARAMS=<?!= paramsJson ?>;</script>
+<?!= include('genko') ?>
+<?!= include('registry') ?>
+<?!= include('layout') ?>
+<?!= include('render') ?>
+<style>
+  .navwrap{padding:24px; overflow:auto;}
+  /* ホームは「きょうの じゅぎょう」1枚だけにする。
+     ふだんの使用でたどる階層を見せない。 */
+  .today{background:#fff; border:3px solid var(--accent); border-radius:16px;
+         padding:26px; max-width:640px; margin:10px auto 18px;}
+  .today .t{font-size:14px; color:var(--accent); font-weight:700;}
+  .today .n{font-size:26px; font-weight:700; margin:8px 0 18px; line-height:1.4;}
+  .today button{font-size:20px; min-height:60px; padding:12px 34px;}
+  .more{display:block; margin:0 auto; max-width:640px; text-align:center;}
+  .more button{min-height:46px;}
+  .state{display:flex; align-items:center; gap:7px; font-size:14px; font-weight:700;}
+  .state .dot{width:11px; height:11px; border-radius:50%; background:var(--accent);}
+  .state.dirty{color:#a8322a;} .state.dirty .dot{background:#a8322a;}
+  .state.saving{color:#6b675e;} .state.saving .dot{background:#c8a44a;}
+  .remain{font-size:15px; font-weight:700; padding:6px 14px; border-radius:99px;
+          background:#fff; border:1px solid var(--ui-line); cursor:pointer; min-height:40px;}
+  .remain.done{background:var(--accent); color:#fff; border-color:var(--accent); cursor:default;}
+  .field.todo{box-shadow:inset 7px 0 0 -1px #d98b80;}
+  /* おためし中であることを、画面のいちばん上で常に知らせる */
+  .trial{background:#f6efe2; border-bottom:1px solid #ddc9a3; color:#6b5322;
+         font-size:13px; font-weight:700; padding:7px 16px;
+         display:flex; align-items:center; gap:10px;}
+  .trial button{min-height:32px; padding:5px 12px; font-size:13px;}
+</style>
+</head>
+<body>
+
+<div class="trial" id="trial" style="display:none">
+  <span>おためし中です。ここで書いたものは <b>きろくされません</b>。</span>
+  <span class="sp"></span>
+  <button id="toedit">編集にもどる</button>
+</div>
+
+<header>
+  <h1 id="ttl">ワークシート</h1>
+  <span class="crumb sp" id="crumb"></span>
+  <button class="remain" id="remain" style="display:none"></button>
+  <span class="state" id="state" style="display:none"><span class="dot"></span><span id="stext"></span></span>
+  <span class="crumb" id="who"></span>
+  <button id="back" style="display:none">もどる</button>
+</header>
+
+<main>
+  <div class="navwrap" id="nav"></div>
+  <div class="stagewrap" id="wrap" style="display:none"><div class="stage" id="stage"></div></div>
+  <div class="pager" id="pager" style="display:none"></div>
+</main>
+
+<!-- 原稿用紙の書き込み。画面の左に寄せる。ワークシートの外なので紙面が崩れない -->
+<div class="writer" id="drawer">
+  <div class="dh"><span id="dtitle"></span><span class="cnt" id="dcnt"></span>
+    <span class="sp"></span><button id="dclose">とじる</button></div>
+  <textarea id="dtext" placeholder="よこ書きで 書きます。&#10;右の原稿用紙に たてがきで 出ます。"></textarea>
+  <p class="hint">ふりがなは 漢字のあとに <b>《 》</b><br>れい： 作文《さくぶん》</p>
+</div>
+
+<script>
+var BROWSE = param('b'), SUB = param('s'), UID = param('u'), LNAME = param('l');
+var TRY = !!param('try');   // 教師が児童画面を試すとき。保存しない。
+var LIST = [], TPL = null, ANS = {}, PG = 0, META = null;
+var dirty = false, saving = false, timer = null;
+
+function uniqBy(arr, key){
+  var seen = {}, out = [];
+  arr.forEach(function(x){ var k = x[key]; if (k && !seen[k]){ seen[k] = 1; out.push(x); } });
+  return out;
+}
+function lessonUrl(u, l){
+  return '?u=' + encodeURIComponent(u) + '&l=' + encodeURIComponent(l);
+}
+
+/* ================= ホーム =================
+   きょうの じゅぎょうが あれば それだけを出す。
+   さがす操作は「まえの じゅぎょう」の奥に置く。 */
+function renderNav(){
+  var today = LIST.filter(function(x){ return x.pub === '今日'; })[0];
+
+  if (!BROWSE && !SUB && !UID){
+    var h = '';
+    if (today){
+      h += '<div class="today"><div class="t">きょうの じゅぎょう</div><div class="n">' +
+           esc(today.subject + '　' + today.name) + '</div>' +
+           '<button class="primary" data-u="' + esc(today.unitId) + '" data-l="' +
+           esc(today.name) + '">ひらく</button></div>' +
+           '<div class="more"><button id="br">まえの じゅぎょうを さがす</button></div>';
+    } else {
+      h += '<p class="empty">きょうの じゅぎょうは まだ ありません。</p>' +
+           '<div class="more"><button id="br">じゅぎょうを さがす</button></div>';
+    }
+    $('nav').innerHTML = h;
+    if ($('br')) $('br').addEventListener('click', function(){ navTo('?b=1'); });
+    bindCards();
+    $('back').style.display = 'none';
+    return;
+  }
+
+  var h2 = '';
+  if (!SUB){
+    h2 = '<div class="cards">' + uniqBy(LIST, 'subject').map(function(x){
+      return '<button class="card" data-s="' + esc(x.subject) + '">' +
+             '<span class="s">きょうか</span><span class="m">' + esc(x.subject) + '</span></button>';
+    }).join('') + '</div>';
+  } else if (!UID){
+    h2 = '<div class="cards">' +
+      uniqBy(LIST.filter(function(x){ return x.subject === SUB; }), 'unitId').map(function(x){
+        return '<button class="card" data-uu="' + esc(x.unitId) + '">' +
+               '<span class="s">たんげん</span><span class="m">' + esc(x.unit) + '</span></button>';
+      }).join('') + '</div>';
+    $('crumb').textContent = SUB;
+  } else {
+    var ls = LIST.filter(function(x){ return x.unitId === UID; });
+    h2 = '<div class="cards">' + ls.map(function(x){
+      return '<button class="card" data-u="' + esc(x.unitId) + '" data-l="' + esc(x.name) + '">' +
+             '<span class="s">じゅぎょう</span><span class="m">' + esc(x.name) + '</span></button>';
+    }).join('') + '</div>';
+    $('crumb').textContent = SUB + (ls[0] ? ' ／ ' + ls[0].unit : '');
+  }
+  $('nav').innerHTML = h2 || '<p class="empty">まだ じゅぎょうが ありません。</p>';
+  bindCards();
+  $('back').style.display = '';
+}
+
+function bindCards(){
+  $('nav').querySelectorAll('[data-s]').forEach(function(b){
+    b.addEventListener('click', function(){ navTo('?b=1&s=' + encodeURIComponent(this.dataset.s)); });
+  });
+  $('nav').querySelectorAll('[data-uu]').forEach(function(b){
+    b.addEventListener('click', function(){
+      navTo('?b=1&s=' + encodeURIComponent(SUB) + '&u=' + encodeURIComponent(this.dataset.uu)); });
+  });
+  $('nav').querySelectorAll('[data-l]').forEach(function(b){
+    b.addEventListener('click', function(){ navTo(lessonUrl(this.dataset.u, this.dataset.l)); });
+  });
+}
+
+/* ================= 授業ページ ================= */
+var FIELDS = null;
+function allFields(){
+  if (FIELDS) return FIELDS;
+  FIELDS = [];
+  (TPL.pages || []).forEach(function(p, pi){
+    (p.objects || []).forEach(function(o){
+      if (KIND[o.kind] && KIND[o.kind].group === 'field') FIELDS.push({o: o, page: pi});
+    });
+  });
+  return FIELDS;
+}
+function isEmpty(o){
+  var v = ANS[o.id];
+  if (v == null) return true;
+  if (v instanceof Array) return v.length === 0;
+  return String(v).trim() === '';
+}
+
+function updateRemain(){
+  var fs = allFields(), left = fs.filter(function(f){ return isEmpty(f.o); });
+  var el = $('remain');
+  el.style.display = fs.length ? '' : 'none';
+  if (!fs.length) return;
+  el.className = 'remain' + (left.length ? '' : ' done');
+  el.textContent = left.length ? ('のこり ' + left.length + ' こ') : 'ぜんぶ かけました';
+  el.disabled = !left.length;
+
+  $('stage').querySelectorAll('.ob[data-id]').forEach(function(el2){
+    var o = findObject(el2.getAttribute('data-id'));
+    var f = el2.querySelector('.field');
+    if (o && f) f.classList.toggle('todo', isEmpty(o));
+  });
+}
+
+/** 「のこり」を押すと、まだ書いていない欄まで連れていく */
+$('remain').addEventListener('click', function(){
+  var next = allFields().filter(function(f){ return isEmpty(f.o); })[0];
+  if (!next) return;
+  if (next.page !== PG){ PG = next.page; drawPage(); }
+  var el = $('stage').querySelector('.ob[data-id="' + next.o.id + '"]');
+  if (!el) return;
+  el.classList.add('pulse');
+  setTimeout(function(){ el.classList.remove('pulse'); }, 2400);
+  var input = el.querySelector('input,textarea,select');
+  if (input) input.focus();
+});
+
+function setState(kind, text){
+  $('state').style.display = '';
+  $('state').className = 'state ' + kind;
+  $('stext').textContent = text;
+}
+/* 打鍵のたびに紙面を走査して残数を数え直すと重い。
+   状態の表示だけ即座に変え、走査は 200ms まとめる。 */
+var scanT = null;
+function markDirty(){
+  if (TRY){ setState('', 'おためし中（きろくされません）'); }
+  else {
+    dirty = true;
+    setState('dirty', 'まだ ほぞんされていません');
+    clearTimeout(timer);
+    timer = setTimeout(save, 2500 + Math.random() * 1500);  // 同時集中を避けてばらす
+  }
+  clearTimeout(scanT);
+  scanT = setTimeout(function(){
+    ANS = readAnswers($('stage'), ANS);
+    updateRemain();
+  }, 200);
+}
+function save(done){
+  clearTimeout(timer);
+  if (TRY){ if (done) done(); return; }
+  if (saving) return;
+  ANS = readAnswers($('stage'), ANS);
+  saving = true;
+  setState('saving', 'ほぞんちゅう…');
+  google.script.run
+    .withSuccessHandler(function(r){
+      saving = false; dirty = false;
+      setState('', r.savedAt + ' に ほぞんしました');
+      if (done) done();
+    })
+    .withFailureHandler(function(){
+      saving = false;
+      setState('dirty', 'ほぞんできません。もういちど かいてみてください');
+    })
+    .saveAnswer(UID, LNAME, ANS);
+}
+
+function renderLesson(){
+  $('nav').style.display = 'none';
+  $('wrap').style.display = 'flex';
+  $('back').style.display = '';
+  $('ttl').textContent = META.name;
+  $('crumb').textContent = META.subject + ' ／ ' + META.unit;
+  setState('', TRY ? 'おためし中（きろくされません）' : 'ほぞんずみ');
+  drawPage();
+}
+
+/* 打鍵のたびに全ページを線形探索していたので、対応表を1度だけ作る。 */
+var OMAP = null;
+function buildMap(){
+  OMAP = {};
+  (TPL.pages || []).forEach(function(p, pi){
+    (p.objects || []).forEach(function(o){ OMAP[o.id] = {o: o, page: pi}; });
+  });
+}
+function findObject(id){ return (OMAP && OMAP[id]) ? OMAP[id].o : null; }
+
+/** ページ送りはタブではなく、下に大きなボタンで出す */
+function drawPager(){
+  var n = TPL.pages.length, el = $('pager');
+  if (n <= 1){ el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.innerHTML =
+    (PG > 0 ? '<button id="pv">◀ まえ</button>' : '') +
+    '<span class="n">' + (PG + 1) + ' / ' + n + '</span>' +
+    (PG < n - 1 ? '<button class="primary" id="nx">つぎへ ▶</button>' : '');
+  if ($('pv')) $('pv').addEventListener('click', function(){ turn(-1); });
+  if ($('nx')) $('nx').addEventListener('click', function(){ turn(1); });
+}
+function turn(d){
+  closeDrawer();
+  ANS = readAnswers($('stage'), ANS);
+  if (dirty) save();
+  PG = Math.max(0, Math.min(TPL.pages.length - 1, PG + d));
+  drawPage();
+}
+
+function drawPage(){
+  $('stage').innerHTML = pageHtml(TPL.pages[PG], 'input', ANS);
+  fitStage($('stage'), $('wrap'));
+  bindFieldView($('stage'), findObject);   // 字数表示・自動縮小・児童の切替
+  drawPager();
+  updateRemain();
+}
+
+/* ---- 原稿用紙の書き込み ---- */
+var GID = null;
+
+function openDrawer(id){
+  var o = findObject(id);
+  if (!o) return;
+  GID = id;
+  $('dtitle').textContent = o.label || '原稿用紙';
+  var ta = $('dtext');
+  ta.value = (ANS[id] == null) ? '' : ANS[id];
+  if (o.maxChars) ta.setAttribute('maxlength', o.maxChars); else ta.removeAttribute('maxlength');
+  $('drawer').classList.add('on');
+  document.body.classList.add('writing');
+  drawerCount(o);
+  ta.focus();
+  fitStage($('stage'), $('wrap'));      // 左パネルの分だけ紙面が縮むので測り直す
+}
+
+function closeDrawer(){
+  GID = null;
+  $('drawer').classList.remove('on');
+  document.body.classList.remove('writing');
+  fitStage($('stage'), $('wrap'));
+}
+
+function drawerCount(o){
+  var n = String($('dtext').value || '').replace(/《[^》]*》/g, '').replace(/\s/g, '').length;
+  var el = $('dcnt');
+  if (!o.showCount && !o.maxChars){ el.textContent = ''; return; }
+  el.textContent = o.maxChars ? (n + ' / ' + o.maxChars + ' 字') : (n + ' 字');
+  el.classList.toggle('over', !!o.maxChars && n >= o.maxChars);
+}
+
+$('stage').addEventListener('click', function(e){
+  var t = e.target.closest ? e.target.closest('[data-open]') : null;
+  if (t) openDrawer(t.getAttribute('data-open'));
+});
+
+var gT = null;
+$('dtext').addEventListener('input', function(){
+  if (!GID) return;
+  var o = findObject(GID), txt = this.value;
+  ANS[GID] = txt;
+  drawerCount(o);
+  dirty = true;
+  setState(TRY ? '' : 'dirty', TRY ? 'おためし中（きろくされません）' : 'まだ ほぞんされていません');
+  if (!TRY){ clearTimeout(timer); timer = setTimeout(save, 2500 + Math.random() * 1500); }
+
+  /* 20×20なら1回の組み直しで400マスを作る。打つたびにやると重いのでまとめる。 */
+  clearTimeout(gT);
+  gT = setTimeout(function(){
+    var host = $('stage').querySelector('.ob[data-id="' + GID + '"] .genkopv');
+    if (host && o) host.innerHTML = genkoView(o, txt);
+    updateRemain();
+  }, 120);
+});
+
+$('dclose').addEventListener('click', function(){ if (dirty && !TRY) save(); closeDrawer(); });
+
+$('stage').addEventListener('input', markDirty);
+$('stage').addEventListener('change', markDirty);
+setInterval(function(){ if (dirty && !saving) save(); }, 25000 + Math.random() * 10000);
+window.addEventListener('beforeunload', function(e){
+  if (!dirty || TRY) return;
+  e.preventDefault(); e.returnValue = '';
+});
+
+function toEditor(){
+  navTo('?view=editor&u=' + encodeURIComponent(UID) + '&l=' + encodeURIComponent(LNAME));
+}
+$('toedit').addEventListener('click', toEditor);
+
+$('back').addEventListener('click', function(){
+  function go(){
+    if (TRY) return toEditor();
+    if (LNAME) navTo('?b=1&s=' + encodeURIComponent(META ? META.subject : '') +
+                     '&u=' + encodeURIComponent(UID));
+    else if (UID) navTo('?b=1&s=' + encodeURIComponent(SUB));
+    else if (SUB) navTo('?b=1');
+    else navTo('');
+  }
+  if (dirty) save(go); else go();
+});
+window.addEventListener('resize', function(){
+  if ($('wrap').style.display !== 'none') fitStage($('stage'), $('wrap'));
+});
+
+/* ================= 起動 ================= */
+if (UID && LNAME){
+  google.script.run.withSuccessHandler(function(d){
+    META = d.meta; TPL = d.template; ANS = d.answer || {};
+    buildMap(); FIELDS = null;
+    if (d.trial){
+      TRY = true;
+      $('trial').style.display = 'flex';
+      $('who').textContent = '';
+    } else {
+      $('who').textContent = d.name ? d.name + ' さん' : '';
+    }
+    renderLesson();
+  }).withFailureHandler(function(e){
+    $('nav').innerHTML = '<p class="empty">' + esc(e.message) + '</p>';
+  }).openLesson(UID, LNAME, TRY);
+} else {
+  google.script.run.withSuccessHandler(function(d){
+    LIST = d.lessons; renderNav();
+  }).withFailureHandler(function(e){
+    $('nav').innerHTML = '<p class="empty">' + esc(e.message) + '</p>';
+  }).listIndex();
+}
+</script>
+</body>
+</html>

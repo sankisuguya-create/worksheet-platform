@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top"><meta charset="utf-8">
+<?!= include('css') ?>
+<script>window.APP_URL='<?!= appUrl ?>'; window.PARAMS=<?!= paramsJson ?>;</script>
+<?!= include('genko') ?>
+<?!= include('registry') ?>
+<?!= include('layout') ?>
+<?!= include('render') ?>
+<style>
+  main{padding:20px; overflow:auto; display:block; max-width:900px; margin:0 auto; width:100%;}
+  .box{background:#fff; border:1px solid var(--ui-line); border-radius:10px;
+       padding:16px; margin-bottom:16px;}
+  .box .ttl{font-size:14px; font-weight:700; display:block; margin-bottom:8px;}
+  textarea.json{width:100%; height:220px; font-family:ui-monospace,monospace; font-size:12.5px;}
+  .row{display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin-top:10px;}
+  .row label{font-size:12px; color:#6b675e; display:flex; flex-direction:column; gap:4px;}
+  .row input,.row select{width:180px;}
+  .sum{border-left:3px solid var(--accent); padding:10px 14px; margin-top:12px;
+       background:#faf9f6; font-size:13px; line-height:1.9; border-radius:0 8px 8px 0;}
+  .sum.bad{border-color:#a8322a;}
+  .sum b{font-size:14px;}
+  code{background:var(--ui-bg); padding:1px 5px; border-radius:4px; font-size:12px;}
+  pre{background:var(--ui-bg); padding:12px; border-radius:8px; overflow:auto;
+      font-size:12px; line-height:1.6;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ワークシートの取り込み</h1>
+  <span class="sp"></span>
+  <button id="back">授業一覧へ</button>
+  <span class="msg" id="msg"></span>
+</header>
+
+<main>
+  <div class="box">
+    <span class="ttl">JSONを貼る</span>
+    <p class="note"><code>x, y, w, h</code> は書かなくてかまいません。省略した分は自動で並びます。
+       <code>"layout":"2col"</code> で2段組、<code>"full":true</code> で全幅になります。</p>
+    <textarea class="json" id="jin" placeholder='ここに貼り付けます'></textarea>
+    <div class="row">
+      <button class="primary" id="chk">中身を確かめる</button>
+      <button id="ex1">例：授業1つ</button>
+      <button id="ex2">例：単元まるごと</button>
+    </div>
+    <div id="sum"></div>
+    <div class="row" id="dest" style="display:none">
+      <label>取り込み先の単元<select id="iu"></select></label>
+      <label>授業名<input type="text" id="inm" placeholder="03 すがたの変化" style="width:240px"></label>
+    </div>
+    <div class="row"><button class="primary" id="go" disabled>取り込む</button></div>
+  </div>
+
+  <div class="box">
+    <span class="ttl">書き方</span>
+    <p class="note">使える <code>kind</code> は次のとおりです。</p>
+    <p class="note" id="kinds"></p>
+    <pre id="sample"></pre>
+  </div>
+</main>
+
+<script>
+var PENDING = null, UNITS = [];
+
+var EX1 = {
+  layout: '2col',
+  objects: [
+    {kind: 'text', text: '水のすがたはどう変わるだろう', size: 32, full: true},
+    {kind: 'in_short', label: '予想'},
+    {kind: 'in_long', label: 'わかったこと', required: true},
+    {kind: 'in_check', label: '見えたもの', options: ['ゆげ', 'あわ', '水てき']},
+    {kind: 'table', rows: 4, cols: 3, heads: ['回', '温度', 'ようす'], full: true}
+  ]
+};
+var EX2 = {
+  unit: {subject: '理科', grade: '4年', name: '水のすがた'},
+  lessons: [
+    {name: '01 ふしぎを見つける', objects: [
+      {kind: 'text', text: '水はどこへ行ったのだろう', size: 30, full: true},
+      {kind: 'in_long', label: '気づいたこと', required: true}
+    ]},
+    {name: '02 予想を立てる', layout: '2col', objects: [
+      {kind: 'in_short', label: '予想'},
+      {kind: 'in_long', label: 'そう考えたわけ'}
+    ]}
+  ]
+};
+
+function call(fn, args, onOk){
+  google.script.run
+    .withSuccessHandler(onOk || function(){})
+    .withFailureHandler(function(e){ flash(e.message, true); })
+    [fn].apply(null, args);
+}
+
+/* ---- 確認 ---- */
+function checkLesson_(j){
+  var r = normalizeTemplate(j), s = summarize(r.template);
+  $('sum').innerHTML = '<div class="sum' + (r.warnings.length ? ' bad' : '') + '">' +
+    '<b>授業1つ</b>　' + s.pages + 'ページ／' + s.objects + '個<br>' +
+    'シートに作られる列：' + (s.fields.length ? esc(s.fields.join('｜')) : 'なし') +
+    (r.warnings.length ? '<br>' + r.warnings.map(esc).join('<br>') : '') + '</div>';
+  $('dest').style.display = 'flex';
+  return {type: 'lesson', template: r.template};
+}
+
+function checkUnit_(j){
+  if (!j.unit) throw new Error('unit がありません。');
+  var lessons = [], warn = [], lines = [];
+  j.lessons.forEach(function(l, i){
+    if (!l.name) throw new Error((i + 1) + '本目の授業に name がありません。');
+    var r = normalizeTemplate(l);
+    warn = warn.concat(r.warnings.map(function(w){ return l.name + '：' + w; }));
+    var s = summarize(r.template);
+    lines.push('・' + esc(l.name) + '（' + s.pages + 'ページ／列 ' + s.fields.length + '）');
+    lessons.push({name: l.name, template: r.template});
+  });
+  $('sum').innerHTML = '<div class="sum' + (warn.length ? ' bad' : '') + '">' +
+    '<b>単元まるごと</b>　' +
+    esc(((j.unit.grade || '') + ' ' + (j.unit.subject || '') + ' ' +
+         (j.unit.name || '')).trim()) + '<br>' + lines.join('<br>') +
+    (warn.length ? '<br>' + warn.map(esc).join('<br>') : '') + '</div>';
+  $('dest').style.display = 'none';
+  return {type: 'unit', meta: j.unit, lessons: lessons};
+}
+
+$('chk').addEventListener('click', function(){
+  PENDING = null;
+  $('go').disabled = true;
+  $('dest').style.display = 'none';
+  var raw = $('jin').value.trim();
+  if (!raw){ $('sum').innerHTML = ''; return; }
+  var j;
+  try { j = JSON.parse(raw); }
+  catch (e){
+    $('sum').innerHTML = '<div class="sum bad">JSONとして読めません。' + esc(e.message) + '</div>';
+    return;
+  }
+  try {
+    PENDING = (j.lessons instanceof Array) ? checkUnit_(j) : checkLesson_(j);
+    $('go').disabled = false;
+  } catch (e){
+    $('sum').innerHTML = '<div class="sum bad">' + esc(e.message) + '</div>';
+  }
+});
+
+$('go').addEventListener('click', function(){
+  if (!PENDING) return;
+  this.disabled = true; flash('取り込み中…');
+  if (PENDING.type === 'unit'){
+    var meta = PENDING.meta;
+    call('importUnitBundle', [meta, PENDING.lessons], function(r){
+      flash(r.lessons.length + '本の授業を取り込みました');
+      setTimeout(function(){ navTo('?view=teacher'); }, 900);
+    });
+  } else {
+    var u = $('iu').value, nm = ($('inm').value || '').trim();
+    if (!u || !nm){ flash('取り込み先の単元と授業名を入れてください', true); this.disabled = false; return; }
+    call('importLessonInto', [u, nm, PENDING.template], function(name){
+      navTo('?view=editor&u=' + encodeURIComponent(u) + '&l=' + encodeURIComponent(name));
+    });
+  }
+});
+
+$('ex1').addEventListener('click', function(){ $('jin').value = JSON.stringify(EX1, null, 2); });
+$('ex2').addEventListener('click', function(){ $('jin').value = JSON.stringify(EX2, null, 2); });
+$('back').addEventListener('click', function(){ navTo('?view=teacher'); });
+
+/* ---- 書き方の案内は種別定義から作る（増やしたら自動で載る） ---- */
+$('kinds').innerHTML =
+  '<b>おく</b>：' + kindsOf('place').map(function(k){
+    return '<code>' + k + '</code>（' + esc(kindLabel(k)) + '）'; }).join('　') +
+  '<br><b>書かせる</b>：' + kindsOf('field').map(function(k){
+    return '<code>' + k + '</code>（' + esc(kindLabel(k)) + '）'; }).join('　');
+$('sample').textContent = JSON.stringify(EX1, null, 2);
+
+google.script.run.withSuccessHandler(function(d){
+  UNITS = d.units;
+  $('iu').innerHTML = UNITS.map(function(u){
+    return '<option value="' + esc(u.id) + '">' +
+           esc((u.grade ? u.grade + ' ' : '') + (u.subject ? u.subject + ' ' : '') + u.name) +
+           '</option>';
+  }).join('');
+}).listIndex();
+</script>
+</body>
+</html>
