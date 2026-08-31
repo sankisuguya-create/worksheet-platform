@@ -189,6 +189,7 @@ function renderAnswers(d){
 
   var h = '<div class="row">' +
     '<button class="primary" id="collect">みんなの考えを並べる</button>' +
+    '<button id="print">印刷する</button>' +
     '<button id="open">この授業のシートを開く</button>' +
     '<button id="exp">JSONを書き出す</button>' +
     '<button id="reload">さいよみこみ</button>' +
@@ -213,6 +214,8 @@ function renderAnswers(d){
 
   $('collect').addEventListener('click', function(){
     navTo('?view=collect&u=' + encodeURIComponent(UID) + '&l=' + encodeURIComponent(LNAME)); });
+  $('print').addEventListener('click', function(){
+    navTo('?view=print&u=' + encodeURIComponent(UID) + '&l=' + encodeURIComponent(LNAME)); });
   $('open').addEventListener('click', function(){ window.open(d.sheetUrl, '_blank'); });
 
   // ☆を押した順に番号が振られる。取り上げる相手と見せる順を1操作で決める。

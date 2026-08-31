@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top"><meta charset="utf-8">
+<?!= include('css') ?>
+<script>window.APP_URL='<?!= appUrl ?>'; window.PARAMS=<?!= paramsJson ?>;</script>
+<?!= include('genko') ?>
+<?!= include('registry') ?>
+<?!= include('layout') ?>
+<?!= include('render') ?>
+<style id="pagecss">@page{size:A4 landscape; margin:6mm;}</style>
+<style>
+  main{display:block; overflow:auto; padding:0;}
+  .bar{display:flex; gap:10px; flex-wrap:wrap; align-items:center;
+       padding:10px 16px; background:#fff; border-bottom:1px solid var(--ui-line);}
+  .bar label{font-size:12px; color:#6b675e; display:flex; flex-direction:column; gap:3px;}
+  .bar select{min-width:130px;}
+  .sheets{padding:18px; display:flex; flex-direction:column; align-items:center; gap:18px;}
+
+  /* 1枚の用紙。面付けに応じて中に1・2・4枚の紙面を入れる。
+     A系・B系はどれも縦横比 1:√2 なので、用紙が変わっても中身の形は変わらない。 */
+  .paper2{background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.16);
+          display:grid; gap:0; overflow:hidden;}
+  .paper2.up1{width:1120px; height:792px;  grid-template-columns:1fr;}
+  .paper2.up2{width:792px;  height:1120px; grid-template-rows:1fr 1fr;}
+  .paper2.up4{width:1120px; height:792px;  grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;}
+
+  .slot{position:relative; overflow:hidden;}
+  .slot .inner{position:absolute; left:0; top:0; width:1400px; height:990px;
+               transform-origin:top left; background:#fff;}
+  .slot .who{position:absolute; left:0; top:0; right:0; height:34px; z-index:3;
+             display:flex; align-items:center; gap:10px; padding:0 14px;
+             font-size:17px; font-weight:700; color:var(--ink);}
+  .slot .who .cls{font-size:13px; color:#6b675e; font-weight:400;}
+  /* 切り取り線 */
+  .paper2.up2 .slot:first-child{border-bottom:1px dashed #bbb;}
+  .paper2.up4 .slot:nth-child(1),.paper2.up4 .slot:nth-child(2){border-bottom:1px dashed #bbb;}
+  .paper2.up4 .slot:nth-child(odd){border-right:1px dashed #bbb;}
+
+  .note2{font-size:12.5px; color:#6b675e; line-height:1.7; padding:0 18px;}
+
+  @media print{
+    header,.bar,.note2{display:none !important;}
+    body{background:#fff;}
+    .sheets{padding:0; gap:0; display:block;}
+    .paper2{box-shadow:none; width:100% !important; height:auto !important;
+            aspect-ratio:var(--ar); page-break-after:always; break-after:page;}
+    .paper2:last-child{page-break-after:auto; break-after:auto;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>印刷</h1>
+  <span class="sp crumb" id="crumb"></span>
+  <button id="back">提出にもどる</button>
+  <span class="msg" id="msg"></span>
+</header>
+
+<div class="bar" id="bar"></div>
+<p class="note2" id="note"></p>
+<main><div class="sheets" id="sheets"></div></main>
+
+<script>
+var UID = param('u'), LNAME = param('l');
+var D = null, WHO = 'all', UP = 1, PAPER = 'A4', FROM = 0, CHUNK = 10;
+
+/* 面付けが決まれば用紙の向きも決まる。
+   A系・B系の紙は半分にすると比率は保たれるが向きが90°変わるため、
+   2面は用紙を縦にして上下、4面は横にして2×2でないと余白が出る。
+   教師に向きを考えさせないよう、ここで自動的に決める。 */
+var UPS = {
+  1: {cls: 'up1', orient: 'landscape', ar: '1.4142 / 1'},
+  2: {cls: 'up2', orient: 'portrait',  ar: '1 / 1.4142'},
+  4: {cls: 'up4', orient: 'landscape', ar: '1.4142 / 1'}
+};
+
+function rows(){
+  if (!D) return [];
+  var list = D.rows.slice();
+  if (WHO === 'pick') list = list.filter(function(r){ return r.pick > 0; })
+                                 .sort(function(a,b){ return a.pick - b.pick; });
+  else if (WHO === 'done') list = list.filter(function(r){ return r.filled > 0; });
+  else if (WHO === 'todo') list = list.filter(function(r){ return !r.filled; });
+  return list;
+}
+
+function drawBar(){
+  $('bar').innerHTML =
+    '<label>だれの<select id="wsel">' +
+      '<option value="all"'  + (WHO==='all' ?' selected':'') + '>ぜんいん</option>' +
+      '<option value="pick"' + (WHO==='pick'?' selected':'') + '>取り上げた人</option>' +
+      '<option value="done"' + (WHO==='done'?' selected':'') + '>書いた人だけ</option>' +
+      '<option value="todo"' + (WHO==='todo'?' selected':'') + '>まだの人（白紙）</option>' +
+    '</select></label>' +
+    '<label>1枚に<select id="usel">' +
+      '<option value="1"' + (UP===1?' selected':'') + '>1人（そのまま）</option>' +
+      '<option value="2"' + (UP===2?' selected':'') + '>2人（用紙たて）</option>' +
+      '<option value="4"' + (UP===4?' selected':'') + '>4人（用紙よこ）</option>' +
+    '</select></label>' +
+    '<label>用紙<select id="psel">' +
+      ['A4','A3','B4','B5'].map(function(p){
+        return '<option' + (PAPER===p?' selected':'') + '>' + p + '</option>'; }).join('') +
+    '</select></label>' +
+    '<label>何人ずつ<select id="csel">' +
+      [10,20,40].map(function(n){
+        return '<option value="' + n + '"' + (CHUNK===n?' selected':'') + '>' + n + '人</option>';
+      }).join('') + '</select></label>' +
+    '<span class="sp"></span><span id="range" class="note"></span>' +
+    '<button id="prev">◀ まえ</button><button id="next">つぎ ▶</button>' +
+    '<button class="primary" id="prt">印刷する</button>';
+
+  $('wsel').addEventListener('change', function(){ WHO = this.value; FROM = 0; draw(); });
+  $('usel').addEventListener('change', function(){ UP = +this.value; FROM = 0; draw(); });
+  $('psel').addEventListener('change', function(){ PAPER = this.value; draw(); });
+  $('csel').addEventListener('change', function(){ CHUNK = +this.value; FROM = 0; draw(); });
+  $('prev').addEventListener('click', function(){ FROM = Math.max(0, FROM - CHUNK); draw(); });
+  $('next').addEventListener('click', function(){ FROM += CHUNK; draw(); });
+  $('prt').addEventListener('click', function(){ window.print(); });
+}
+
+/** 用紙と向きを @page に反映する。A系・B系は比率が同じなので紙面の形は変わらない。 */
+function setPaper(){
+  var u = UPS[UP];
+  $('pagecss').textContent = '@page{size:' + PAPER + ' ' + u.orient + '; margin:6mm;}';
+  document.documentElement.style.setProperty('--ar', u.ar);
+}
+
+/** 1人分の紙面。授業に複数ページあれば、その分だけ枠を作る。 */
+function slotHtml(r, pageIdx){
+  var page = D.template.pages[pageIdx];
+  return '<div class="slot"><div class="who">' + esc(r.name) +
+         '<span class="cls">' + esc(D.meta.grade + ' ' + D.meta.subject + '／' + D.meta.name) +
+         (D.template.pages.length > 1 ? '（' + (pageIdx + 1) + 'ページ）' : '') +
+         '</span></div>' +
+         '<div class="inner">' + pageHtml(page, 'view', r.data) + '</div></div>';
+}
+
+function draw(){
+  drawBar();
+  setPaper();
+  var list = rows();
+  var shown = list.slice(FROM, FROM + CHUNK);
+  $('range').textContent = list.length
+    ? ((FROM + 1) + '〜' + Math.min(FROM + CHUNK, list.length) + ' / ' + list.length + '人')
+    : '';
+  $('prev').disabled = (FROM <= 0);
+  $('next').disabled = (FROM + CHUNK >= list.length);
+
+  if (!shown.length){
+    $('sheets').innerHTML = '<p class="empty">出せるものがありません。</p>';
+    return;
+  }
+
+  // 児童×ページ の枠を作り、面付けの数ごとに用紙へ詰める
+  var slots = [];
+  shown.forEach(function(r){
+    D.template.pages.forEach(function(_, pi){ slots.push(slotHtml(r, pi)); });
+  });
+
+  var u = UPS[UP], h = '';
+  for (var i = 0; i < slots.length; i += UP){
+    h += '<div class="paper2 ' + u.cls + '">' + slots.slice(i, i + UP).join('') + '</div>';
+  }
+  $('sheets').innerHTML = h;
+  scaleAll();
+
+  $('note').textContent =
+    'A4・A3・B4・B5はどれも縦横比が同じなので、用紙を変えても紙面の形は変わりません。大きさだけ変わります。' +
+    '35人分を一度に出すと描画が重くなるため、既定で10人ずつに分けています。';
+}
+
+/** 論理座標1400×990の紙面を、枠の大きさに合わせて縮める。 */
+function scaleAll(){
+  document.querySelectorAll('.slot').forEach(function(s){
+    var inner = s.querySelector('.inner');
+    var k = s.clientWidth / PAGE_W;
+    inner.style.transform = 'scale(' + k + ')';
+  });
+}
+window.addEventListener('resize', scaleAll);
+window.addEventListener('beforeprint', function(){ setTimeout(scaleAll, 0); });
+
+$('back').addEventListener('click', function(){
+  navTo('?view=teacher&u=' + encodeURIComponent(UID) + '&l=' + encodeURIComponent(LNAME));
+});
+
+google.script.run.withSuccessHandler(function(d){
+  D = d;
+  $('crumb').textContent = d.meta.grade + ' ' + d.meta.subject + '／' + d.meta.name;
+  draw();
+}).withFailureHandler(function(e){
+  $('sheets').innerHTML = '<p class="empty">' + esc(e.message) + '</p>';
+}).listAnswers(UID, LNAME);
+</script>
+</body>
+</html>

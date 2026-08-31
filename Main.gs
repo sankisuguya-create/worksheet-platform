@@ -8,6 +8,8 @@
  *   Lesson.gs  テンプレート、回答、列同期
  *   Admin.gs   単元・授業の作成／改名／削除／並べ替え／公開
  *   Collect.gs 抽出集約（取り上げの指定と読み出し）
+ *
+ * 画面は app / editor / teacher / import / collect / print
  *   Test.gs    自動テスト（runTests を実行）
  *
  * 公開設定（必須）
@@ -22,7 +24,8 @@ var APP_TITLE = 'ワークシート';
 function doGet(e) {
   var p = (e && e.parameter) || {};
   var view = p.view || '';
-  if (view === 'teacher' || view === 'editor' || view === 'import' || view === 'collect') {
+  if (view === 'teacher' || view === 'editor' || view === 'import' ||
+      view === 'collect' || view === 'print') {
     if (!isTeacher_(whoAmI_())) return deny_();
     return page_(view === 'teacher' ? 'teacher' : view, APP_TITLE + ' 教師用', p);
   }
