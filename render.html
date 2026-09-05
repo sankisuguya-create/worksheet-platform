@@ -53,7 +53,7 @@ function objHtml(o, mode, ans){
     var cnt = (!ro && (o.showCount || o.maxChars)) ? '<span class="cnt"></span>' : '';
     inner = '<div class="field' + (ro ? ' ro' : '') + '" data-fid="' + esc(o.id) + '">' +
             '<div class="fl">' + esc(o.label) +
-            (o.required ? ' <span class="req">*</span>' : '') + cnt + ctl + '</div>' +
+            (o.required ? ' <span class="req">かならず</span>' : '') + cnt + ctl + '</div>' +
             '<div class="fb">' + inner + '</div></div>';
   }
   return '<div class="ob ob-' + o.kind + '" data-id="' + esc(o.id) + '" style="' + style + '">' +

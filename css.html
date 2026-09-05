@@ -30,7 +30,7 @@ input:focus,textarea:focus,select:focus{outline:2px solid var(--accent); outline
 .msg{font-size:14px; font-weight:700; color:var(--accent);}
 .msg.error{color:#a8322a;}
 .note{font-size:12.5px; color:#6b675e; line-height:1.7;}
-.empty{padding:50px; text-align:center; color:#8a857b;}
+.empty{padding:50px; text-align:center; color:#6b675e;}   /* 白地5.6:1。#8a857b は3.7で本文に足りない */
 
 /* ---- 共通ヘッダ ---- */
 header{display:flex; align-items:center; gap:10px; flex-wrap:wrap;
@@ -63,7 +63,10 @@ main{flex:1; display:flex; flex-direction:column; min-height:0;}
        padding:6px; display:flex; flex-direction:column; gap:4px; height:100%;}
 .field.ro{border-style:dashed;}
 .field .fl{font-size:15px; font-weight:700; color:var(--accent); line-height:1.2;}
-.field .fl .req{color:#a8322a;}
+/* 必須は色ではなく語で示す。赤字は1型色覚で緑のラベルに近づき目立たなくなるうえ、
+   3年児童は `*` を「かならず書く」と読まない。白文字を朱赤の地に載せる（6.7:1）。 */
+.field .fl .req{flex:none; font-size:12px; font-weight:700; color:#fff;
+                background:#a8322a; padding:2px 8px; border-radius:4px; letter-spacing:.02em;}
 .field .fb{flex:1; min-height:0; display:flex; flex-direction:column;}
 .field textarea,.field input[type=text],.field input[type=number],.field select{
   width:100%; flex:1; font-size:22px; border:1px solid var(--ui-line); border-radius:6px;
@@ -83,7 +86,7 @@ main{flex:1; display:flex; flex-direction:column; min-height:0;}
 /* 児童が自分で切り替えられる欄に出る小さな操作 */
 .field .fctl{display:flex; gap:4px; margin-left:auto;}
 .field .fctl button{min-height:24px; padding:1px 8px; font-size:12px; border-radius:6px;}
-.field .fl{display:flex; align-items:center; gap:6px;}
+.field .fl{display:flex; align-items:center; gap:6px; flex-wrap:wrap;}
 .field .cnt{font-size:12px; color:#6b675e; font-weight:400;}
 .field .cnt.over{color:#a8322a; font-weight:700;}
 
